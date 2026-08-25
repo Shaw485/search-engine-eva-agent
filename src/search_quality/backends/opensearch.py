@@ -70,11 +70,7 @@ class OpenSearchBackend:
             or parsed_url.hostname not in LOCAL_HOSTS
         ):
             raise ValueError("Stage 0 OpenSearch smoke is restricted to localhost")
-        if not SAFE_INDEX_RE.fullmatch(self.index_name):
-            raise ValueError(
-                "OpenSearch smoke index must start with 'search-quality-' and "
-                "contain only lowercase letters, numbers, dots, underscores, or dashes"
-            )
+        self._validate_index_name(self.index_name)
 
     @classmethod
     def from_environment(cls) -> OpenSearchBackend:
@@ -97,6 +93,10 @@ class OpenSearchBackend:
         )
 
     def replace_documents(self, documents: Sequence[ProductDocument]) -> None:
+        # Re-check and capture the public attribute at the destructive boundary.
+        # Constructor validation alone is insufficient because callers can mutate it.
+        index_name = self.index_name
+        self._validate_index_name(index_name)
         if not documents:
             raise ValueError("documents must not be empty")
         product_ids = [document.product.product_id for document in documents]
@@ -104,6 +104,16 @@ class OpenSearchBackend:
             raise ValueError("product_id values must be unique")
         if any(len(document.embedding) != self.dimensions for document in documents):
             raise ValueError(f"all embeddings must have {self.dimensions} dimensions")
+        if any(
+            not all(math.isfinite(value) for value in document.embedding)
+            for document in documents
+        ):
+            raise ValueError("embedding values must be finite")
+        if any(
+            not any(value != 0.0 for value in document.embedding)
+            for document in documents
+        ):
+            raise ValueError("embedding must not be a zero vector")
         if not self.allow_index_reset:
             raise OpenSearchError(
                 "index replacement is disabled; set OPENSEARCH_ALLOW_INDEX_RESET=true "
@@ -128,12 +138,12 @@ class OpenSearchBackend:
             )
         self._request_json(
             "DELETE",
-            f"/{quote(self.index_name, safe='')}",
+            f"/{quote(index_name, safe='')}",
             expected_statuses={200, 404},
         )
         self._request_json(
             "PUT",
-            f"/{quote(self.index_name, safe='')}",
+            f"/{quote(index_name, safe='')}",
             payload=self.index_definition,
             expected_statuses={200},
         )
@@ -144,11 +154,12 @@ class OpenSearchBackend:
                 json.dumps(
                     {
                         "index": {
-                            "_index": self.index_name,
+                            "_index": index_name,
                             "_id": document.product.product_id,
                         }
                     },
                     separators=(",", ":"),
+                    allow_nan=False,
                 )
             )
             source = asdict(document.product)
@@ -276,6 +287,14 @@ class OpenSearchBackend:
             raise ValueError("query vector values must be finite")
         if not any(value != 0.0 for value in query_vector):
             raise ValueError("query vector must not be a zero vector")
+
+    @staticmethod
+    def _validate_index_name(index_name: str) -> None:
+        if not SAFE_INDEX_RE.fullmatch(index_name):
+            raise ValueError(
+                "OpenSearch smoke index must start with 'search-quality-' and "
+                "contain only lowercase letters, numbers, dots, underscores, or dashes"
+            )
 
     @staticmethod
     def _parse_hits(payload: dict[str, Any], *, strategy: str) -> list[SearchHit]:

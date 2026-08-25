@@ -21,12 +21,17 @@ def document(product_id: str = "p001") -> ProductDocument:
 
 
 class RecordingOpenSearchBackend(OpenSearchBackend):
-    def __init__(self, *, identity: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        identity: dict[str, Any] | None = None,
+        allow_index_reset: bool = True,
+    ) -> None:
         super().__init__(
             base_url="http://127.0.0.1:9200",
             index_name="search-quality-contract-test",
             index_config_path=CONFIG,
-            allow_index_reset=True,
+            allow_index_reset=allow_index_reset,
         )
         self.calls: list[dict[str, Any]] = []
         self.identity = identity or {
@@ -109,13 +114,23 @@ def test_opensearch_adapter_rejects_remote_hosts() -> None:
 
 
 def test_index_reset_requires_explicit_opt_in() -> None:
-    backend = OpenSearchBackend(
-        base_url="http://127.0.0.1:9200",
-        index_name="search-quality-smoke",
-        index_config_path=CONFIG,
-    )
+    backend = RecordingOpenSearchBackend(allow_index_reset=False)
     with pytest.raises(OpenSearchError, match="disabled"):
         backend.replace_documents([document()])
+    assert backend.calls == []
+
+
+@pytest.mark.parametrize("index_name", ["_all", "*", "search-quality-a,b"])
+def test_index_reset_rechecks_mutated_index_name_before_delete(
+    index_name: str,
+) -> None:
+    backend = RecordingOpenSearchBackend()
+    backend.index_name = index_name
+
+    with pytest.raises(ValueError, match="must start"):
+        backend.replace_documents([document()])
+
+    assert backend.calls == []
 
 
 def test_index_reset_checks_cluster_identity_before_delete() -> None:
@@ -161,13 +176,59 @@ def test_bulk_and_search_request_contracts() -> None:
     assert vector_payload["sort"] == [{"_score": "desc"}, {"product_id": "asc"}]
 
 
-@pytest.mark.parametrize("invalid", [[0.0] * 64, [float("nan")] + [0.0] * 63])
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        [0.0] * 64,
+        [float("nan")] + [0.0] * 63,
+        [float("inf")] + [0.0] * 63,
+        [float("-inf")] + [0.0] * 63,
+    ],
+)
 def test_opensearch_adapter_rejects_invalid_cosine_vectors(
     invalid: list[float],
 ) -> None:
     backend = RecordingOpenSearchBackend()
     with pytest.raises(ValueError, match="finite|zero vector"):
         backend.search_vector(invalid, top_k=2)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        [0.0] * 64,
+        [float("nan")] + [0.0] * 63,
+        [float("inf")] + [0.0] * 63,
+        [float("-inf")] + [0.0] * 63,
+    ],
+)
+def test_opensearch_bulk_rejects_invalid_vectors_before_reset(
+    invalid: list[float],
+) -> None:
+    invalid_document = document()
+    object.__setattr__(invalid_document, "embedding", tuple(invalid))
+    backend = RecordingOpenSearchBackend()
+
+    with pytest.raises(ValueError, match="finite|zero vector"):
+        backend.replace_documents([invalid_document])
+
+    assert backend.calls == []
+
+
+def test_opensearch_json_requests_reject_nan_before_network() -> None:
+    backend = OpenSearchBackend(
+        base_url="http://127.0.0.1:9200",
+        index_name="search-quality-unused",
+        index_config_path=CONFIG,
+    )
+
+    with pytest.raises(ValueError, match="Out of range float values"):
+        backend._request_json(
+            "POST",
+            "/search-quality-unused/_search",
+            payload={"value": float("nan")},
+            expected_statuses={200},
+        )
 
 
 def test_opensearch_adapter_rejects_k_above_engine_limit() -> None:
