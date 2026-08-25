@@ -11,6 +11,8 @@ product list.
 
 The project is currently at **Stage 0: engineering skeleton and technical gate**.
 See the full implementation guide in [ROADMAP.md](ROADMAP.md).
+Critical concepts the project owner should learn are tracked in
+[docs/LEARNING_CHECKPOINTS.md](docs/LEARNING_CHECKPOINTS.md).
 
 ## Dataset
 
@@ -65,4 +67,3 @@ Evidence-backed report + Trace + Replay
 The first benchmark focuses on reranking the fully judged candidate set. A
 separate closed-corpus track will be used for retrieval metrics so incomplete
 relevance judgments are not presented as full-catalog recall.
-
