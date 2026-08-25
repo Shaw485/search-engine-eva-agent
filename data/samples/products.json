@@ -1,0 +1,72 @@
+[
+  {
+    "product_id": "p001",
+    "title": "Logitech M185 Wireless Mouse",
+    "description": "Compact 2.4 GHz cordless optical mouse with USB receiver",
+    "brand": "Logitech",
+    "category": "Computer Mice"
+  },
+  {
+    "product_id": "p002",
+    "title": "Bluetooth Ergonomic Wireless Mouse",
+    "description": "Rechargeable silent mouse for laptops and tablets",
+    "brand": "Anker",
+    "category": "Computer Mice"
+  },
+  {
+    "product_id": "p003",
+    "title": "USB-C Wired Travel Mouse",
+    "description": "Portable optical mouse with a braided cable",
+    "brand": "Dell",
+    "category": "Computer Mice"
+  },
+  {
+    "product_id": "p004",
+    "title": "Wireless Mechanical Keyboard",
+    "description": "Bluetooth keyboard with hot-swappable switches",
+    "brand": "Keychron",
+    "category": "Computer Keyboards"
+  },
+  {
+    "product_id": "p005",
+    "title": "Large Gaming Mouse Pad",
+    "description": "Non-slip desk mat for keyboard and mouse",
+    "brand": "SteelSeries",
+    "category": "Mouse Pads"
+  },
+  {
+    "product_id": "p006",
+    "title": "AA Alkaline Batteries 8 Pack",
+    "description": "Long-lasting batteries for wireless accessories",
+    "brand": "Energizer",
+    "category": "Batteries"
+  },
+  {
+    "product_id": "p007",
+    "title": "Wireless RGB Gaming Mouse",
+    "description": "Low-latency rechargeable mouse with six buttons",
+    "brand": "Razer",
+    "category": "Computer Mice"
+  },
+  {
+    "product_id": "p008",
+    "title": "USB-C Charging Cable",
+    "description": "Nylon braided charging cable for electronics",
+    "brand": "Belkin",
+    "category": "Cables"
+  },
+  {
+    "product_id": "p009",
+    "title": "iPhone 15 Pro Protective Case",
+    "description": "Shockproof clear phone case with MagSafe support",
+    "brand": "Spigen",
+    "category": "Phone Cases"
+  },
+  {
+    "product_id": "p010",
+    "title": "Men's Lightweight Running Shoes",
+    "description": "Breathable road running sneakers",
+    "brand": "Asics",
+    "category": "Athletic Shoes"
+  }
+]

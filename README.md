@@ -1,69 +1,148 @@
 # Search Engine EVA Agent
 
 An evidence-driven evaluation and diagnosis agent for e-commerce search ranking.
-
-The project uses the Amazon Shopping Queries ESCI dataset to compare BM25,
-vector retrieval, hybrid ranking, and Cross-Encoder reranking. Every conclusion
-must be traceable to a dataset version, run configuration, metric, and ranked
-product list.
+The project uses Amazon Shopping Queries ESCI to compare BM25, vector retrieval,
+hybrid ranking, and Cross-Encoder reranking. Every conclusion must be traceable
+to a dataset version, run configuration, metric, and ranked product list.
 
 ## Project status
 
-The project is currently at **Stage 0: engineering skeleton and technical gate**.
-See the full implementation guide in [ROADMAP.md](ROADMAP.md).
-Critical concepts the project owner should learn are tracked in
-[docs/LEARNING_CHECKPOINTS.md](docs/LEARNING_CHECKPOINTS.md).
+**Stage 0 local technical gate: complete.** The repository now has a reproducible
+Python environment, a shared search-backend contract, deterministic local BM25
+and exact cosine search, a ten-product fixture, a FastAPI smoke endpoint, CI,
+and repository safety checks.
+
+The optional OpenSearch 3.8.0 adapter, mapping, and Apple Silicon-compatible
+Compose profile are implemented. Live container verification remains pending
+because Docker is not installed on the current development host. This is an
+explicit pending integration check, not an implicit fallback or a claimed pass.
+
+- Full execution guide: [ROADMAP.md](ROADMAP.md)
+- Stage 0 evidence: [docs/STAGE_0_REPORT.md](docs/STAGE_0_REPORT.md)
+- Backend decision: [docs/adr/001-search-backend.md](docs/adr/001-search-backend.md)
+- Required learning: [docs/LEARNING_CHECKPOINTS.md](docs/LEARNING_CHECKPOINTS.md)
+
+## Quick start
+
+Prerequisites: Python 3.11–3.13 and GNU Make. The reference development versions
+are recorded in `.python-version` and `.nvmrc`; Node is not needed until the Web
+stage.
+
+```bash
+git clone https://github.com/Shaw485/search-engine-eva-agent.git
+cd search-engine-eva-agent
+make setup
+make check
+```
+
+`make check` runs formatting/lint checks, repository policy checks, all tests,
+and the deterministic local smoke path. Individual commands are also available:
+
+```bash
+make test
+make data-sample
+make smoke
+QUERY="iphone 15 pro case" make smoke
+```
+
+Start the Stage 0 API with:
+
+```bash
+make api
+curl http://127.0.0.1:8000/health
+curl 'http://127.0.0.1:8000/smoke?query=wireless%20mouse&top_k=3'
+```
+
+## What the Stage 0 vector result means
+
+Stage 0 uses `deterministic-hash-v1`, a 64-dimensional hashing vector with no
+downloaded model. It verifies vector dimensions, indexing, cosine ranking,
+determinism, and backend interchangeability. It is **not a semantic embedding**
+and its rankings are not evidence that vector search improves relevance. A
+versioned semantic model is introduced in Stage 3 and evaluated only after the
+Stage 2 metrics are trusted.
+
+The local and OpenSearch adapters share a method and normalized-result contract,
+not identical scores or rankings. Their analyzers and BM25 field weights differ.
+Later experiment manifests must record the backend and configuration; quality is
+compared with relevance metrics rather than raw cross-backend scores.
+
+## Architecture
+
+```text
+10-product JSON fixture
+          │
+          ├── deterministic embedding provider ──┐
+          │                                      │
+          └──────────── ProductDocument ─────────┘
+                             │
+                    SearchBackend contract
+                       ┌─────┴─────┐
+                       │           │
+                Local backend   OpenSearch adapter
+                BM25 + cosine   BM25 + Lucene k-NN
+                 (required)       (optional)
+                       └─────┬─────┘
+                             │
+                  normalized hits + smoke JSON
+```
+
+The embedding provider is intentionally separate from storage. Search and
+future evaluation code do not depend on an LLM or an external model API.
+
+## Optional OpenSearch smoke
+
+OpenSearch is not required for the accepted local Stage 0 path. To run the
+optional integration after installing Docker Desktop:
+
+```bash
+make opensearch-up
+make smoke-opensearch
+make opensearch-down
+```
+
+Allocate at least 4 GB to Docker Desktop. The image is pinned by version and
+multi-architecture digest, so Apple Silicon runs the native ARM64 image without
+forcing `linux/amd64`.
+
+This Compose profile disables the OpenSearch security plugin and binds port
+9200 only to `127.0.0.1`. It is for a private local smoke test only and must
+never be exposed or reused as a shared/production configuration. Index reset is
+protected by localhost, project-prefix, explicit opt-in, and cluster identity
+checks. Do not run multiple OpenSearch smoke commands concurrently; Stage 0
+rebuilds a fixed disposable index.
+
+Official references: [OpenSearch downloads](https://opensearch.org/downloads/),
+[Docker installation](https://docs.opensearch.org/latest/install-and-configure/install-opensearch/docker/),
+and [k-NN vector fields](https://docs.opensearch.org/latest/mappings/supported-field-types/knn-vector/).
 
 ## Dataset
 
 The official Amazon ESCI repository is pinned under `data/esci-data` as a Git
-submodule. Its two Parquet files are stored by the upstream project with Git
-LFS; the products file alone is about 1.03 GB. This repository therefore keeps
-the source pinned instead of duplicating the large LFS objects into this
-repository's quota.
+submodule. Its two Parquet files are stored upstream with Git LFS; the products
+file alone is about 1.03 GB. This repository pins the source rather than
+duplicating those large objects.
 
-Clone the project and download the complete dataset with:
-
-```bash
-git clone --recurse-submodules https://github.com/Shaw485/search-engine-eva-agent.git
-cd search-engine-eva-agent
-bash scripts/download_esci.sh
-```
-
-If the repository was cloned without submodules:
+The full dataset is **not needed for Stage 0**. Stage 1 download instructions:
 
 ```bash
 git submodule update --init --depth 1 data/esci-data
 bash scripts/download_esci.sh
 ```
 
-The downloaded files are available under:
+Files are then available under `data/esci-data/shopping_queries_dataset/`.
 
-```text
-data/esci-data/shopping_queries_dataset/
-├── shopping_queries_dataset_examples.parquet
-├── shopping_queries_dataset_products.parquet
-└── shopping_queries_dataset_sources.csv
-```
+- Dataset source: [amazon-science/esci-data](https://github.com/amazon-science/esci-data)
+- Pinned upstream commit: `7916cdf6ab75a462e77f20ab40428a10923998d5`
+- Upstream license: [Apache-2.0](https://github.com/amazon-science/esci-data/blob/main/LICENSE)
 
-Dataset source: [amazon-science/esci-data](https://github.com/amazon-science/esci-data)  
-Pinned upstream commit: `7916cdf6ab75a462e77f20ab40428a10923998d5`  
-Upstream license: [Apache-2.0](https://github.com/amazon-science/esci-data/blob/main/LICENSE)
+ESCI labels cover judged candidates for each query, not every Amazon product.
+The primary benchmark therefore reranks fully judged candidate sets. A separate
+closed-corpus track is used for retrieval metrics so incomplete judgments are
+not presented as full-catalog recall.
 
-## Planned workflow
+## Next step
 
-```text
-ESCI query + candidate products
-              ↓
-BM25 / Vector / Hybrid / Cross-Encoder
-              ↓
-nDCG / MRR / Recall + ranking diff
-              ↓
-Bad-case diagnosis agent
-              ↓
-Evidence-backed report + Trace + Replay
-```
-
-The first benchmark focuses on reranking the fully judged candidate set. A
-separate closed-corpus track will be used for retrieval metrics so incomplete
-relevance judgments are not presented as full-catalog recall.
+Stage 1 builds a reproducible ESCI data pipeline: validated English smoke/dev/
+test query sets, query-level splits, data checksums, a data dictionary, and an
+EDA report. The frozen test split is established before ranking experiments.

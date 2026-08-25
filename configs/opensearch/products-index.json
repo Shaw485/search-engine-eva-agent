@@ -1,0 +1,41 @@
+{
+  "settings": {
+    "index": {
+      "knn": true,
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    }
+  },
+  "mappings": {
+    "properties": {
+      "product_id": {
+        "type": "keyword"
+      },
+      "title": {
+        "type": "text"
+      },
+      "description": {
+        "type": "text"
+      },
+      "brand": {
+        "type": "text"
+      },
+      "category": {
+        "type": "text"
+      },
+      "embedding": {
+        "type": "knn_vector",
+        "dimension": 64,
+        "method": {
+          "name": "hnsw",
+          "engine": "lucene",
+          "space_type": "cosinesimil",
+          "parameters": {
+            "ef_construction": 100,
+            "m": 16
+          }
+        }
+      }
+    }
+  }
+}
