@@ -491,6 +491,33 @@ def build_stage1(
             quarantine_path, compression="zstd", statistics=True
         )
 
+    manifest_target = Path(manifest_path)
+    previous_outputs: dict[str, Any] | None = None
+    if manifest_target.is_file():
+        try:
+            previous_payload = json.loads(manifest_target.read_text(encoding="utf-8"))
+            previous_outputs = previous_payload.get("outputs")
+        except (json.JSONDecodeError, OSError):
+            previous_outputs = None
+    output_fingerprints = {
+        name: {
+            "file_sha256": evidence["file_sha256"],
+            "canonical_sha256": evidence["canonical_sha256"],
+        }
+        for name, evidence in output_evidence.items()
+    }
+    previous_fingerprints = (
+        {
+            name: {
+                "file_sha256": evidence.get("file_sha256"),
+                "canonical_sha256": evidence.get("canonical_sha256"),
+            }
+            for name, evidence in previous_outputs.items()
+        }
+        if isinstance(previous_outputs, dict)
+        else None
+    )
+
     manifest = {
         "schema_version": config.schema_version,
         "source": {
@@ -505,6 +532,13 @@ def build_stage1(
         "cleaning": asdict(prepared.cleaning),
         "profiles": profiles,
         "outputs": output_evidence,
+        "reproducibility": {
+            "previous_manifest_available": previous_fingerprints is not None,
+            "outputs_identical_to_previous": previous_fingerprints
+            == output_fingerprints
+            if previous_fingerprints is not None
+            else None,
+        },
         "evaluation_boundary": {
             "primary_track": "judged-candidate reranking",
             "unjudged_products_are_irrelevant": False,
@@ -512,7 +546,6 @@ def build_stage1(
             "smoke_is_formal_split": False,
         },
     }
-    manifest_target = Path(manifest_path)
     manifest_target.parent.mkdir(parents=True, exist_ok=True)
     manifest_target.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -557,6 +590,8 @@ def render_report(manifest: dict[str, Any]) -> str:
             f"{manifest['cleaning']['empty_title_judgments_quarantined']}",
             f"- Queries missing a source category: "
             f"{manifest['cleaning']['missing_source_queries']}",
+            f"- Repeated build matched previous logical and file hashes: "
+            f"{manifest['reproducibility']['outputs_identical_to_previous']}.",
             "- Formal split leakage: checked by Query ID and normalized Query text.",
             "- Product join key: `(product_locale, product_id)`.",
             "",

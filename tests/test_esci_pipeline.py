@@ -222,3 +222,17 @@ def test_build_writes_parquet_manifest_and_report(tmp_path: Path) -> None:
     assert (output_dir / "smoke.parquet").is_file()
     assert manifest["evaluation_boundary"]["smoke_is_formal_split"] is False
     assert "candidate-set reranking" in report_path.read_text(encoding="utf-8")
+
+    repeated = build_stage1(
+        source_dir=source_dir,
+        output_dir=output_dir,
+        config=fixture_config(),
+        lock=lock,
+        manifest_path=manifest_path,
+        report_path=report_path,
+        project_root=tmp_path,
+    )
+    assert repeated["reproducibility"] == {
+        "previous_manifest_available": True,
+        "outputs_identical_to_previous": True,
+    }
