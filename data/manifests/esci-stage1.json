@@ -1,0 +1,317 @@
+{
+  "cleaning": {
+    "duplicate_judgments_removed": 0,
+    "empty_title_judgments_quarantined": 0,
+    "input_judgments": 601354,
+    "missing_source_queries": 0
+  },
+  "code_revision": "f1031c9ffb0fd36d4bfa8858cfb679b7f2f080e9",
+  "config": {
+    "dataset_version_column": "small_version",
+    "dataset_version_value": 1,
+    "dev_query_count": 500,
+    "locale": "us",
+    "official_test_value": "test",
+    "official_train_value": "train",
+    "schema_version": "esci-stage1-v1",
+    "smoke_query_count": 20,
+    "source_commit": "7916cdf6ab75a462e77f20ab40428a10923998d5",
+    "split_seed": "esci-stage1-v1-us",
+    "valid_labels": [
+      "E",
+      "S",
+      "C",
+      "I"
+    ]
+  },
+  "config_sha256": "8768a37abf7b84fd83249ddd37e124ef1ffe18723d6ca8384c0265f9bad3a66a",
+  "evaluation_boundary": {
+    "full_catalog_recall_claimed": false,
+    "primary_track": "judged-candidate reranking",
+    "smoke_is_formal_split": false,
+    "unjudged_products_are_irrelevant": false
+  },
+  "outputs": {
+    "dev": {
+      "canonical_sha256": "cf6fd4d825d1d060d9c1b3d0744ceeccfcfa5845837877acc1ec71ff98f6cb54",
+      "file_sha256": "4b5ac547c90a38eaee73784de7a5b4dbda474208bf0f11ccd101c4ee94f2a316",
+      "path": "dev.parquet",
+      "size": 4341262
+    },
+    "smoke": {
+      "canonical_sha256": "9cc75ff6896e19f7fef9e98309f4924db2cbca87a708c93c3920a19592cc976a",
+      "file_sha256": "b0512f03c0a11ff443f3dab4336c9780e75d8f0b18f1cc30c047ef777603a9a7",
+      "path": "smoke.parquet",
+      "size": 178895
+    },
+    "test": {
+      "canonical_sha256": "0844497da7d1fa9b3fa6c2911ebd145f0b6b9f8c41eb78169b8de740d2902b1d",
+      "file_sha256": "b6deed5e2ea1153a852316a7d1c155f3dbe7ae6ee22b7c3c9d08d5f65fa55618",
+      "path": "test.parquet",
+      "size": 71371063
+    },
+    "train": {
+      "canonical_sha256": "0c03162d540d913ca7efeed336cd5aeddbc73089800e0193573c81f293bbb2a5",
+      "file_sha256": "d54c2499c9b818e16c8949dbccb21e0ce976fc530ee4e5532905a9744246120f",
+      "path": "train.parquet",
+      "size": 148294820
+    }
+  },
+  "profiles": {
+    "dev": {
+      "candidate_count": {
+        "max": 69,
+        "mean": 20.122,
+        "min": 8,
+        "p50": 16,
+        "p95": 40,
+        "queries_over_40": 13
+      },
+      "canonical_sha256": "cf6fd4d825d1d060d9c1b3d0744ceeccfcfa5845837877acc1ec71ff98f6cb54",
+      "columns": 16,
+      "field_completeness": {
+        "product_brand": {
+          "empty_count": 438,
+          "empty_rate": 0.043534
+        },
+        "product_bullet_point": {
+          "empty_count": 1041,
+          "empty_rate": 0.103469
+        },
+        "product_color": {
+          "empty_count": 3067,
+          "empty_rate": 0.30484
+        },
+        "product_description": {
+          "empty_count": 4886,
+          "empty_rate": 0.485638
+        }
+      },
+      "labels": {
+        "C": 453,
+        "E": 4528,
+        "I": 1692,
+        "S": 3388
+      },
+      "products": 9992,
+      "queries": 500,
+      "query_character_count": {
+        "max": 133,
+        "min": 2,
+        "p50": 22,
+        "p95": 39
+      },
+      "query_sources": {
+        "behavioral": 8,
+        "negations": 31,
+        "nlqec": 1,
+        "other": 405,
+        "parse_pattern": 55
+      },
+      "query_token_count": {
+        "max": 25,
+        "min": 1,
+        "p50": 4,
+        "p95": 7
+      },
+      "rows": 10061
+    },
+    "smoke": {
+      "candidate_count": {
+        "max": 43,
+        "mean": 20.8,
+        "min": 15,
+        "p50": 16,
+        "p95": 40,
+        "queries_over_40": 1
+      },
+      "canonical_sha256": "9cc75ff6896e19f7fef9e98309f4924db2cbca87a708c93c3920a19592cc976a",
+      "columns": 16,
+      "field_completeness": {
+        "product_brand": {
+          "empty_count": 13,
+          "empty_rate": 0.03125
+        },
+        "product_bullet_point": {
+          "empty_count": 32,
+          "empty_rate": 0.076923
+        },
+        "product_color": {
+          "empty_count": 120,
+          "empty_rate": 0.288462
+        },
+        "product_description": {
+          "empty_count": 229,
+          "empty_rate": 0.550481
+        }
+      },
+      "labels": {
+        "C": 25,
+        "E": 211,
+        "I": 70,
+        "S": 110
+      },
+      "products": 416,
+      "queries": 20,
+      "query_character_count": {
+        "max": 51,
+        "min": 7,
+        "p50": 21,
+        "p95": 36
+      },
+      "query_sources": {
+        "behavioral": 1,
+        "negations": 1,
+        "other": 17,
+        "parse_pattern": 1
+      },
+      "query_token_count": {
+        "max": 7,
+        "min": 1,
+        "p50": 4,
+        "p95": 6
+      },
+      "rows": 416
+    },
+    "test": {
+      "candidate_count": {
+        "max": 95,
+        "mean": 20.288,
+        "min": 8,
+        "p50": 16,
+        "p95": 40,
+        "queries_over_40": 198
+      },
+      "canonical_sha256": "0844497da7d1fa9b3fa6c2911ebd145f0b6b9f8c41eb78169b8de740d2902b1d",
+      "columns": 16,
+      "field_completeness": {
+        "product_brand": {
+          "empty_count": 9204,
+          "empty_rate": 0.050655
+        },
+        "product_bullet_point": {
+          "empty_count": 21523,
+          "empty_rate": 0.118453
+        },
+        "product_color": {
+          "empty_count": 55771,
+          "empty_rate": 0.306938
+        },
+        "product_description": {
+          "empty_count": 90885,
+          "empty_rate": 0.50019
+        }
+      },
+      "labels": {
+        "C": 8099,
+        "E": 79708,
+        "I": 30331,
+        "S": 63563
+      },
+      "products": 164900,
+      "queries": 8956,
+      "query_character_count": {
+        "max": 151,
+        "min": 1,
+        "p50": 22,
+        "p95": 40
+      },
+      "query_sources": {
+        "behavioral": 223,
+        "negations": 689,
+        "nlqec": 30,
+        "other": 7233,
+        "parse_pattern": 781
+      },
+      "query_token_count": {
+        "max": 29,
+        "min": 1,
+        "p50": 4,
+        "p95": 7
+      },
+      "rows": 181701
+    },
+    "train": {
+      "candidate_count": {
+        "max": 188,
+        "mean": 20.09,
+        "min": 8,
+        "p50": 16,
+        "p95": 40,
+        "queries_over_40": 462
+      },
+      "canonical_sha256": "0c03162d540d913ca7efeed336cd5aeddbc73089800e0193573c81f293bbb2a5",
+      "columns": 16,
+      "field_completeness": {
+        "product_brand": {
+          "empty_count": 20008,
+          "empty_rate": 0.048849
+        },
+        "product_bullet_point": {
+          "empty_count": 47564,
+          "empty_rate": 0.116125
+        },
+        "product_color": {
+          "empty_count": 126109,
+          "empty_rate": 0.307889
+        },
+        "product_description": {
+          "empty_count": 204474,
+          "empty_rate": 0.499214
+        }
+      },
+      "labels": {
+        "C": 18637,
+        "E": 177291,
+        "I": 69424,
+        "S": 144240
+      },
+      "products": 344452,
+      "queries": 20388,
+      "query_character_count": {
+        "max": 171,
+        "min": 1,
+        "p50": 22,
+        "p95": 40
+      },
+      "query_sources": {
+        "behavioral": 531,
+        "negations": 1598,
+        "nlqec": 68,
+        "other": 16469,
+        "parse_pattern": 1722
+      },
+      "query_token_count": {
+        "max": 29,
+        "min": 1,
+        "p50": 4,
+        "p95": 7
+      },
+      "rows": 409592
+    }
+  },
+  "reproducibility": {
+    "outputs_identical_to_previous": true,
+    "previous_manifest_available": true
+  },
+  "schema_version": "esci-stage1-v1",
+  "source": {
+    "commit": "7916cdf6ab75a462e77f20ab40428a10923998d5",
+    "files": {
+      "shopping_queries_dataset_examples.parquet": {
+        "sha256": "4a735b693b4a424a6fc67f5be6e4c811495c488bbf66d02a602d308b2744263a",
+        "size": 51286808
+      },
+      "shopping_queries_dataset_products.parquet": {
+        "sha256": "25124442d064d64b26f74082d6fa09438d679efc0c183cf28d19064a2b65a265",
+        "size": 1108857465
+      },
+      "shopping_queries_dataset_sources.csv": {
+        "sha256": "a5fed8ecc016443de40bf3c63098f0e3f23bbe4daa4236f1c38b8c3184778c50",
+        "size": 1682802
+      }
+    },
+    "license": "Apache-2.0",
+    "repository": "https://github.com/amazon-science/esci-data.git"
+  }
+}
