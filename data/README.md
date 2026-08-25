@@ -51,3 +51,8 @@ bash scripts/download_esci.sh
 Then run `make data-esci-validate` and `make data-esci-build`. Processed files
 stay under `data/processed/`; aggregate evidence is committed under
 `data/manifests/` and `docs/`.
+
+For development without the 1.16 GB download, the repository includes the
+fixed 20-Query, 416-judgment real ESCI profile at
+`data/samples/esci-stage1-smoke.parquet`. Its provenance, transformation and
+license notice are recorded in `data/samples/README.md`.

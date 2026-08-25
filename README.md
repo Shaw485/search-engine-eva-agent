@@ -147,6 +147,9 @@ make data-esci-build
 
 Raw files stay under `data/raw/esci/`; generated Parquet stays under
 `data/processed/esci-stage1-v1/`. Neither directory is committed.
+The repository does commit the 175 KB real ESCI smoke profile at
+`data/samples/esci-stage1-smoke.parquet` so the schema and labels can be
+inspected without the full download.
 
 - Dataset source: [amazon-science/esci-data](https://github.com/amazon-science/esci-data)
 - Pinned upstream commit: `7916cdf6ab75a462e77f20ab40428a10923998d5`
