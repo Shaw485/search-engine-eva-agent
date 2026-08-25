@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 
 from search_quality.smoke import run_smoke
 
@@ -12,6 +13,15 @@ app = FastAPI(
     title="Search Engine EVA Agent",
     version="0.1.0",
     description="Stage 0 search backend smoke service",
+)
+
+# The production portfolio uses a same-origin Nginx proxy. These two origins are
+# only for local visual QA when the static site and API run on separate ports.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:4173", "http://localhost:4173"],
+    allow_methods=["GET"],
+    allow_headers=["Accept", "Content-Type"],
 )
 
 

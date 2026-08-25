@@ -21,6 +21,7 @@ explicit pending integration check, not an implicit fallback or a claimed pass.
 - Stage 0 evidence: [docs/STAGE_0_REPORT.md](docs/STAGE_0_REPORT.md)
 - Backend decision: [docs/adr/001-search-backend.md](docs/adr/001-search-backend.md)
 - Required learning: [docs/LEARNING_CHECKPOINTS.md](docs/LEARNING_CHECKPOINTS.md)
+- Portfolio deployment: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 
 ## Quick start
 
