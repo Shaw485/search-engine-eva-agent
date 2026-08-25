@@ -1,7 +1,7 @@
 # Search Engine EVA Agent
 
 **Status:** Active  
-**Roadmap position:** Stage 0 local gate complete; Stage 1 ready to start
+**Roadmap position:** Stage 1 technical gate passed; owner checkpoint pending
 **Primary dataset:** Amazon Shopping Queries ESCI  
 **Repository:** https://github.com/Shaw485/search-engine-eva-agent
 
@@ -34,7 +34,11 @@ The canonical learning plan and completion log live in
 - Stage 0 mandatory local path accepted on 2026-08-25.
 - Local BM25 and exact cosine search implement the shared backend contract.
 - OpenSearch 3.8.0 support is implemented but live Docker verification is pending.
-- The Stage 0 owner learning checkpoint remains pending until the verification
-  question in `docs/LEARNING_CHECKPOINTS.md` is answered.
-- The next implementation stage is the ESCI data pipeline; do not begin Web,
-  semantic models, or Agent orchestration early.
+- Stage 1 validated the pinned official ESCI sources and built deterministic
+  English-US train/dev/frozen-test data plus a 20-Query smoke view on 2026-08-26.
+- Stage 1 aggregate evidence lives in `docs/STAGE_1_REPORT.md` and
+  `data/manifests/esci-stage1.json`; large raw and processed data stay ignored.
+- The Stage 1 owner learning checkpoint remains pending until the Query leakage
+  and incomplete-judgment question in `docs/LEARNING_CHECKPOINTS.md` is answered.
+- Do not begin Stage 2 metrics, Web, semantic models, or Agent orchestration
+  before that owner checkpoint is complete.

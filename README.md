@@ -7,10 +7,12 @@ to a dataset version, run configuration, metric, and ranked product list.
 
 ## Project status
 
-**Stage 0 local technical gate: complete.** The repository now has a reproducible
-Python environment, a shared search-backend contract, deterministic local BM25
-and exact cosine search, a ten-product fixture, a FastAPI smoke endpoint, CI,
-and repository safety checks.
+**Stage 1 technical data gate: complete; owner learning check pending.** The
+repository now validates the pinned official ESCI sources and deterministically
+builds English-US train/dev/frozen-test Parquet assets. The fixed smoke profile
+contains 20 dev Queries; dev contains 500 Queries; the official test keeps all
+8,956 English Task 1 Queries. Stage 2 does not start until the Stage 1 learning
+checkpoint is answered.
 
 The optional OpenSearch 3.8.0 adapter, mapping, and Apple Silicon-compatible
 Compose profile are implemented. Live container verification remains pending
@@ -19,6 +21,8 @@ explicit pending integration check, not an implicit fallback or a claimed pass.
 
 - Full execution guide: [ROADMAP.md](ROADMAP.md)
 - Stage 0 evidence: [docs/STAGE_0_REPORT.md](docs/STAGE_0_REPORT.md)
+- Stage 1 evidence: [docs/STAGE_1_REPORT.md](docs/STAGE_1_REPORT.md)
+- Data dictionary: [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md)
 - Backend decision: [docs/adr/001-search-backend.md](docs/adr/001-search-backend.md)
 - Required learning: [docs/LEARNING_CHECKPOINTS.md](docs/LEARNING_CHECKPOINTS.md)
 - Portfolio deployment: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
@@ -45,6 +49,14 @@ make test
 make data-sample
 make smoke
 QUERY="iphone 15 pro case" make smoke
+```
+
+The Stage 1 data path is separate so CI never downloads the 1.16 GB source:
+
+```bash
+make data-download
+make data-esci-validate
+make data-esci-build
 ```
 
 Start the Stage 0 API with:
@@ -122,17 +134,19 @@ and [k-NN vector fields](https://docs.opensearch.org/latest/mappings/supported-f
 
 The official Amazon ESCI repository is pinned under `data/esci-data` as a Git
 submodule. Its two Parquet files are stored upstream with Git LFS; the products
-file alone is about 1.03 GB. This repository pins the source rather than
-duplicating those large objects.
+file alone is about 1.03 GB. The download command retrieves the objects at the
+pinned commit directly into ignored `data/raw/esci/` and verifies their exact
+sizes and SHA-256 hashes. Git LFS is not required locally.
 
-The full dataset is **not needed for Stage 0**. Stage 1 download instructions:
+The full dataset is not downloaded by `make setup` or CI:
 
 ```bash
-git submodule update --init --depth 1 data/esci-data
-bash scripts/download_esci.sh
+make data-download
+make data-esci-build
 ```
 
-Files are then available under `data/esci-data/shopping_queries_dataset/`.
+Raw files stay under `data/raw/esci/`; generated Parquet stays under
+`data/processed/esci-stage1-v1/`. Neither directory is committed.
 
 - Dataset source: [amazon-science/esci-data](https://github.com/amazon-science/esci-data)
 - Pinned upstream commit: `7916cdf6ab75a462e77f20ab40428a10923998d5`
@@ -145,6 +159,6 @@ not presented as full-catalog recall.
 
 ## Next step
 
-Stage 1 builds a reproducible ESCI data pipeline: validated English smoke/dev/
-test query sets, query-level splits, data checksums, a data dictionary, and an
-EDA report. The frozen test split is established before ranking experiments.
+Complete the Stage 1 owner checkpoint on Query-level leakage and incomplete
+judgments. Stage 2 then implements hand-verified nDCG, MRR and Success@K metrics
+before any ranking optimization begins.

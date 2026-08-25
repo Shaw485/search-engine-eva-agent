@@ -51,10 +51,9 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
 
 ## 当前待验证问题
 
-- 阶段：0. 工程骨架
-- 提醒日期：2026-08-25
-- 问题：如果 Query 是精确型号 `iPhone 15 Pro case`，为什么不能只用向量
-  搜索？BM25 在这里保留了什么关键能力？
-- Owner 回答：向量搜索计算相似度；BM25 利用词项稀缺性并保留精确
-  匹配能力，适合识别版本号等关键 Token。
-- 状态：**Completed**
+- 阶段：1. ESCI 数据
+- 提醒日期：2026-08-26
+- 问题：如果 `wireless mouse` 同时出现在 train 和 test，为什么 test 高分
+  不能证明模型能泛化到新 Query？另外，为什么 ESCI 中未标注的商品不能
+  自动当成 Irrelevant，也不能据此宣称全 Amazon 商品库 Recall？
+- 状态：**Awaiting owner answer**

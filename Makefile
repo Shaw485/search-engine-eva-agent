@@ -4,8 +4,9 @@ VENV_PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 QUERY ?= wireless mouse
 
-.PHONY: help setup format lint policy check test smoke data-sample api \
-	opensearch-up opensearch-down smoke-opensearch eval-baseline web clean
+.PHONY: help setup format lint policy check test smoke data-sample data-download \
+	data-esci-validate data-esci-build api opensearch-up opensearch-down \
+	smoke-opensearch eval-baseline web clean
 
 help:
 	@echo "setup             Create the virtual environment and install dependencies"
@@ -16,6 +17,9 @@ help:
 	@echo "test              Run the Stage 0 test suite"
 	@echo "smoke             Run deterministic local BM25 and vector smoke search"
 	@echo "data-sample       Validate the 10-product smoke fixture"
+	@echo "data-download     Download and verify the pinned Amazon ESCI sources"
+	@echo "data-esci-validate Verify source sizes, hashes, magic and schemas"
+	@echo "data-esci-build   Build deterministic Stage 1 train/dev/test assets"
 	@echo "api               Start the local FastAPI service"
 	@echo "opensearch-up     Start the optional local OpenSearch service"
 	@echo "smoke-opensearch  Run the same smoke contract against OpenSearch"
@@ -47,6 +51,15 @@ smoke:
 
 data-sample:
 	$(VENV_PYTHON) -m search_quality.sample_data data/samples/products.json
+
+data-download:
+	bash scripts/download_esci.sh
+
+data-esci-validate:
+	$(VENV_PYTHON) -m search_quality.data.cli --validate-only
+
+data-esci-build:
+	$(VENV_PYTHON) -m search_quality.data.cli
 
 api:
 	$(VENV_PYTHON) -m uvicorn apps.api.main:app --host 127.0.0.1 --port 8000

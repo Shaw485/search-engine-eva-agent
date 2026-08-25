@@ -1,0 +1,13 @@
+{
+  "schema_version": "esci-stage1-v1",
+  "source_commit": "7916cdf6ab75a462e77f20ab40428a10923998d5",
+  "locale": "us",
+  "dataset_version_column": "small_version",
+  "dataset_version_value": 1,
+  "official_train_value": "train",
+  "official_test_value": "test",
+  "dev_query_count": 500,
+  "smoke_query_count": 20,
+  "split_seed": "esci-stage1-v1-us",
+  "valid_labels": ["E", "S", "C", "I"]
+}

@@ -2,7 +2,7 @@
 
 > 文档版本：v0.1  
 > 创建日期：2026-08-25  
-> 当前状态：阶段 0 本地技术闸门已完成；OpenSearch 实机验证待 Docker
+> 当前状态：阶段 1 数据技术闸门已通过；Owner 学习检查待完成
 > 项目周期：8 周，默认每周投入约 10 小时  
 > 使用方式：每次只推进一个阶段；达到本阶段验收门槛后，才进入下一阶段。
 
@@ -107,7 +107,7 @@ search-quality-agent/
 | 阶段 | 周期 | 核心结果 | 状态 |
 |---|---:|---|---|
 | 0. 工程骨架与技术闸门 | 1–2 天 | 项目可以一条命令启动和测试 | **Completed (Local); OpenSearch Live Check Pending** |
-| 1. ESCI 数据管道 | 3–4 天 | 形成可复现的小样本和数据报告 | **Not Started** |
+| 1. ESCI 数据管道 | 3–4 天 | 形成可复现的小样本和数据报告 | **Technical Gate Passed; Learning Check Pending** |
 | 2. 评测内核与基线 | 1 周 | 指标可信，BM25 基线可复现 | **Not Started** |
 | 3. 语义、混合与 Rerank | 1–1.5 周 | 至少四种策略可公平对比 | **Not Started** |
 | 4. Bad Case 诊断体系 | 1 周 | 错误可分类、可定位、可解释 | **Not Started** |
@@ -161,6 +161,11 @@ search-quality-agent/
 
 ### 阶段 1：ESCI 数据管道
 
+> 技术完成记录（2026-08-26）：已锁定并校验官方三个源文件，生成 English-US
+> Task 1 的 20-Query smoke（dev 内视图）、500-Query dev、20,388-Query train
+> 和 8,956-Query frozen test；真实数据报告见 `docs/STAGE_1_REPORT.md`。
+> 进入阶段 2 前仍须完成 Query 泄漏与不完整标注的 Owner 检查点。
+
 目标：把官方数据变成结构稳定、可抽样、可追踪的实验输入。
 
 具体工作：
@@ -169,21 +174,23 @@ search-quality-agent/
 2. 只先处理英文和小样本，跑通后再扩全量。
 3. 统一字段：
    - `query_id`、`query_text`
-   - `product_id`、标题、描述、品牌、颜色、类目
+   - `product_id`、标题、描述、bullet point、品牌、颜色
    - `esci_label`
    - 数据集 split 和 locale
 4. 清理空标题、重复 Query—商品对、异常标签和不可解析记录。
-5. 按 Query 切分训练、验证和测试，防止同一 Query 泄漏到多个集合。
-6. 生成三套数据：
-   - `smoke`：20 个 Query，用于开发；
-   - `dev`：约 500 个 Query，用于快速实验；
-   - `test`：固定且冻结，只用于阶段验收。
+5. 保留官方 test；只从官方 train 按 Query 确定性地产生 train/dev，防止
+   同一 Query 泄漏到多个集合。
+6. 生成正式 train/dev/test 和一个开发视图：
+   - `smoke`：dev 内固定 20 个 Query，用于开发，不是第四个 split；
+   - `dev`：500 个 Query，用于快速实验；
+   - `train`：其余官方 train Query；
+   - `test`：官方 test，固定且冻结，只用于阶段验收。
 7. 输出数据分析：Query 长度、候选数、标签分布、字段缺失率、语言分布。
 
 交付物：
 
 - 可重复运行的数据处理命令。
-- Parquet 格式的 smoke/dev/test 清单。
+- Parquet 格式的 train/dev/test，以及 dev 内 smoke 视图。
 - 数据字典和 EDA 报告。
 - 数据质量测试。
 
@@ -492,8 +499,8 @@ replay_run          回放一次历史实验
 
 ## 10. 下一步
 
-阶段 0 的本地技术闸门已于 2026-08-25 完成，当前路线确定为“本地参考
-后端必跑、OpenSearch 集成可选且显式记录”。下一步只进入**阶段 1：ESCI
-数据管道**：先建立可复现的小样本、Query 级切分和数据质量报告，暂不搭
-Web 页面，也不提前实现排序模型。OpenSearch 实机验证在 Docker 可用后单独
-补做，不阻塞数据管道。
+阶段 1 的数据技术闸门已于 2026-08-26 通过：真实 ESCI 数据已校验并生成
+确定性的 train/dev/frozen-test、smoke 开发视图、Manifest、数据字典和 EDA
+报告。下一步先完成 Owner 对 Query 级泄漏与不完整标注的检查问题；通过后
+进入**阶段 2：评测内核与 BM25 基线**，先用手算样例验证指标，不提前优化
+排序模型。OpenSearch 实机验证在 Docker 可用后单独补做。
