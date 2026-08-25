@@ -22,6 +22,7 @@ explicit pending integration check, not an implicit fallback or a claimed pass.
 - Backend decision: [docs/adr/001-search-backend.md](docs/adr/001-search-backend.md)
 - Required learning: [docs/LEARNING_CHECKPOINTS.md](docs/LEARNING_CHECKPOINTS.md)
 - Portfolio deployment: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+- Live Stage 0 experience: [shawspace.cn/search-eval.html](https://shawspace.cn/search-eval.html)
 
 ## Quick start
 
