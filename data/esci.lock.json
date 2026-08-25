@@ -1,0 +1,12 @@
+{
+  "name": "Amazon Shopping Queries ESCI Dataset",
+  "repository": "https://github.com/amazon-science/esci-data.git",
+  "commit": "7916cdf6ab75a462e77f20ab40428a10923998d5",
+  "license": "Apache-2.0",
+  "files": [
+    "shopping_queries_dataset/shopping_queries_dataset_examples.parquet",
+    "shopping_queries_dataset/shopping_queries_dataset_products.parquet",
+    "shopping_queries_dataset/shopping_queries_dataset_sources.csv"
+  ]
+}
+
