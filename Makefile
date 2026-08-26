@@ -3,6 +3,7 @@ VENV ?= .venv
 VENV_PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 QUERY ?= wireless mouse
+EVAL_PROFILE ?= smoke
 
 .PHONY: help setup format lint policy check test smoke data-sample data-download \
 	data-esci-validate data-esci-build api opensearch-up opensearch-down \
@@ -14,7 +15,7 @@ help:
 	@echo "lint              Check Python formatting and lint rules"
 	@echo "policy            Reject large data, local secrets, and private keys"
 	@echo "check             Run lint, repository policy, tests, and local smoke"
-	@echo "test              Run the Stage 0 test suite"
+	@echo "test              Run the full unit and contract test suite"
 	@echo "smoke             Run deterministic local BM25 and vector smoke search"
 	@echo "data-sample       Validate the 10-product smoke fixture"
 	@echo "data-download     Download and verify the pinned Amazon ESCI sources"
@@ -24,6 +25,8 @@ help:
 	@echo "opensearch-up     Start the optional local OpenSearch service"
 	@echo "smoke-opensearch  Run the same smoke contract against OpenSearch"
 	@echo "opensearch-down   Stop the optional OpenSearch service"
+
+	@echo "eval-baseline     Run the Stage 2 BM25 smoke evaluation"
 
 setup:
 	$(PYTHON) -m venv $(VENV)
@@ -75,8 +78,8 @@ opensearch-down:
 	docker compose down
 
 eval-baseline:
-	@echo "Stage 2 command reserved: ranking metrics are not implemented in Stage 0." >&2
-	@exit 2
+	$(VENV_PYTHON) -m search_quality.evaluation.cli \
+		--profile "$(EVAL_PROFILE)"
 
 web:
 	@echo "Stage 7 command reserved: the Web product is not implemented in Stage 0." >&2

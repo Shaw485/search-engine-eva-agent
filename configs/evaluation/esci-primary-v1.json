@@ -1,0 +1,15 @@
+{
+  "description": "Primary English-US ESCI policy approved for Stage 2 candidate reranking",
+  "label_gains": {
+    "C": 0.01,
+    "E": 1.0,
+    "I": 0.0,
+    "S": 0.1
+  },
+  "policy_id": "esci-primary-v1",
+  "relevant_labels": [
+    "E",
+    "S"
+  ],
+  "schema_version": "relevance-policy-v1"
+}

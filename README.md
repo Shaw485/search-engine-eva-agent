@@ -7,12 +7,12 @@ to a dataset version, run configuration, metric, and ranked product list.
 
 ## Project status
 
-**Stage 1 technical data gate: complete; owner learning check pending.** The
-repository now validates the pinned official ESCI sources and deterministically
-builds English-US train/dev/frozen-test Parquet assets. The fixed smoke profile
-contains 20 dev Queries; dev contains 500 Queries; the official test keeps all
-8,956 English Task 1 Queries. Stage 2 does not start until the Stage 1 learning
-checkpoint is answered.
+**Stage 2 Search Evaluation Harness: in progress.** The Stage 1 technical data
+gate is complete, while its owner learning check remains pending. The repository
+now includes hand-verified nDCG, MRR and Success metrics, the versioned
+`esci-primary-v1` relevance policy, and a deterministic title-BM25 candidate
+reranking smoke run. Routine Stage 2 commands accept only smoke/dev data; the
+8,956-Query frozen test remains unavailable to tuning runs.
 
 The optional OpenSearch 3.8.0 adapter, mapping, and Apple Silicon-compatible
 Compose profile are implemented. Live container verification remains pending
@@ -48,6 +48,7 @@ and the deterministic local smoke path. Individual commands are also available:
 make test
 make data-sample
 make smoke
+make eval-baseline
 QUERY="iphone 15 pro case" make smoke
 ```
 
@@ -73,7 +74,7 @@ Stage 0 uses `deterministic-hash-v1`, a 64-dimensional hashing vector with no
 downloaded model. It verifies vector dimensions, indexing, cosine ranking,
 determinism, and backend interchangeability. It is **not a semantic embedding**
 and its rankings are not evidence that vector search improves relevance. A
-versioned semantic model is introduced in Stage 3 and evaluated only after the
+versioned semantic model is introduced in Stage 6 and evaluated only after the
 Stage 2 metrics are trusted.
 
 The local and OpenSearch adapters share a method and normalized-result contract,
@@ -162,6 +163,7 @@ not presented as full-catalog recall.
 
 ## Next step
 
-Complete the Stage 1 owner checkpoint on Query-level leakage and incomplete
-judgments. Stage 2 then implements hand-verified nDCG, MRR and Success@K metrics
-before any ranking optimization begins.
+Complete the Stage 1 owner checkpoint on Query-level leakage, then promote the
+title-BM25 smoke run to the full 500-Query dev profile and add deterministic
+random/keyword-overlap comparators. Frozen test stays closed until a milestone
+release gate.

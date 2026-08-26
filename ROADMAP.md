@@ -419,6 +419,6 @@ Agent 不可以：
 
 ## 10. 当前唯一下一步
 
-完成阶段 2 的第一小步：用手算样例实现并验证 nDCG、MRR 和 Success 指标，然后用固定 smoke/dev 数据生成标题 BM25 的第一份正式 Baseline Run。
+完成阶段 1 的 Owner 数据泄漏检查，然后将已经通过 smoke 的标题 BM25 候选集重排扩展到完整 500-Query dev，并加入随机与关键词重叠对照，形成第一份正式 Baseline 报告。
 
-在这份 Run 成为可信证据后，立即进入阶段 3 的四工具 Agent 垂直闭环，不提前等待 Vector、Hybrid 或 Web 美化。
+在 dev Run 成为可信证据后，立即进入阶段 3 的四工具 Agent 垂直闭环，不提前等待 Vector、Hybrid 或 Web 美化。
