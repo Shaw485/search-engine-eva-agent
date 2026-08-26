@@ -32,12 +32,13 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
 |---|---|---|---|
 | 0. 工程骨架 | 可复现环境、搜索索引、BM25 与向量搜索的区别 | 能解释为什么先做 Smoke Test，以及两种检索各自擅长什么 | **Completed** |
 | 1. ESCI 数据 | ESCI 四类标签、Query 级切分、数据泄漏、不完整标注 | 能解释为什么同一 Query 不能跨数据集，以及为什么不能直接宣称全库 Recall | **Pending** |
-| 2. 评测内核 | DCG/nDCG、MRR、Recall、Success@K、离线评测 | 能手算一个小例子，并判断不同指标分别奖励什么 | **Pending** |
-| 3. 排序策略 | Embedding、余弦相似度、RRF、Cross-Encoder、召回与精排 | 能说明 BM25、向量、Hybrid 和 Rerank 的顺序及代价 | **Pending** |
-| 4. Bad Case | 错误分类、归因、相关性判断争议、分群分析 | 能区分数据、召回、排序、标签和评测配置问题 | **Pending** |
-| 5. Agent | Agent 与固定工作流、Tool Schema、状态机、证据约束 | 能解释系统为什么是 Agent，以及它被允许和禁止做什么 | **Pending** |
-| 6. Harness | Trace、Replay、超时、重试、幂等、缓存、预算、停止条件 | 能解释一次失败如何定位、复现和安全恢复 | **Pending** |
-| 7. 产品化 | API/前端边界、异步任务、指标披露、演示证据链 | 能独立完成三分钟项目讲解，并打开证据支撑结论 | **Pending** |
+| 2. Search Evaluation Harness | DCG/nDCG、MRR、Recall、Success@K、离线评测 | 能手算一个小例子，并判断不同指标分别奖励什么 | **Pending** |
+| 3. 最小 Agent | Agent 与固定工作流、Tool Schema、观察后分支、证据约束 | 能解释系统为什么是 Agent，并指出一次基于观察的决策 | **Pending** |
+| 4. Agent Runtime Harness | 状态机、权限、Trace、Replay、超时、重试、预算、停止条件 | 能解释一次失败如何定位、复现和安全恢复 | **Pending** |
+| 5. Agent Evaluation Harness | 任务成功率、证据率、恢复率、裁判可靠性、Eval 污染 | 能说明如何证明 Agent 不是偶然成功或语言流畅 | **Pending** |
+| 6. 搜索策略与诊断 | Multi-field BM25、Embedding、RRF、Cross-Encoder、Bad Case | 能说明各策略顺序、代价以及如何区分数据/召回/排序问题 | **Pending** |
+| 7. 诊断与优化 Agent | 假设驱动实验、局部退化、自动化边界、人工审批 | 能判断 Agent 哪些实验可自动执行、哪些变更必须审批 | **Pending** |
+| 8. 产品化 | API/前端边界、异步任务、指标披露、演示证据链 | 能独立完成三分钟项目讲解，并打开证据支撑结论 | **Pending** |
 
 ## 检查点记录
 

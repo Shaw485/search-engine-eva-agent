@@ -1,506 +1,424 @@
-# 电商搜索质量诊断 Agent：建设路线图
+# 搜索评测 Agent：Agent-first 建设路线图
 
-> 文档版本：v0.1  
-> 创建日期：2026-08-25  
-> 当前状态：阶段 1 数据技术闸门已通过；Owner 学习检查待完成
-> 项目周期：8 周，默认每周投入约 10 小时  
-> 使用方式：每次只推进一个阶段；达到本阶段验收门槛后，才进入下一阶段。
+> 文档版本：v0.2
+>
+> 更新日期：2026-08-26
+>
+> 当前状态：阶段 1 数据技术闸门已通过；阶段 2 评测内核进行中
+>
+> 使用方式：一次只跨越一个验收门槛；Agent 的任何结论必须能够回到确定性实验结果。
 
-## 1. 项目目标
+## 1. 最终产品是什么
 
-我们要搭建的不是一个完整商城，也不是一个只会总结搜索结果的聊天机器人，而是一套能够重复运行、量化比较、自动诊断和回放实验的电商搜索质量系统。
+最终产品不是一个搜索页面，也不是若干排序算法的展示集合，而是一个能够自主选择评测工具、观察实验结果、调整诊断路径并给出证据化结论的**搜索评测 Agent**。
 
-最终用户可以选择或输入一个 Query，系统完成：
-
-1. 展示候选商品及 Amazon ESCI 标签。
-2. 分别运行 BM25、向量排序、混合排序和 Cross-Encoder Rerank。
-3. 计算并比较 nDCG、MRR、Recall 等指标。
-4. 找出错排、漏排、属性不匹配和替代品判断错误。
-5. 让诊断 Agent 调用工具完成实验，而不是凭语言模型主观猜测。
-6. 保存完整 Trace，支持 Replay 和版本间对比。
-7. 通过 Web 控制台完成单 Query 诊断和批量评测。
-
-项目最终演示链路：
+用户可以提出如下任务：
 
 ```text
-Query + ESCI 候选商品
-          ↓
-BM25 / Vector / Hybrid / Rerank
-          ↓
-指标计算 + Bad Case 识别
-          ↓
-诊断 Agent 调用分析工具
-          ↓
-改进建议 + 实验对比 + Trace 回放
+为什么 “wireless mouse” 的前 10 名质量不好？
+BM25 和 Hybrid 哪个更适合型号 Query？
+这次字段权重调整是否值得上线？
+找出本次实验退化最严重的 Query，并给出下一步实验。
 ```
 
-## 2. 评测边界：先重排，再检索
+Agent 必须完成：
 
-ESCI 的标签主要覆盖给定 Query 下的一组候选商品，并不等于整个 Amazon 商品库都有完整相关性标注。因此必须拆成两条评测轨道。
+1. 理解目标并形成有限步骤的计划。
+2. 根据任务选择工具，而不是执行写死的固定流程。
+3. 观察工具结果，并据此决定继续、改道或停止。
+4. 比较 Run、指标、延迟和具体排名变化。
+5. 输出可执行建议，并引用 Query、Run ID、指标或 Trace 作为证据。
+6. 在标签不足、工具失败或证据冲突时明确表示无法确认。
 
-### 主轨道：候选集重排评测
+证明“这是 Agent”的最低标准：
 
-- 输入：一个 Query 和该 Query 已标注的候选商品。
-- 任务：把候选商品重新排序。
-- 指标：nDCG@10、MRR@10、Success@K，以及分标签排序表现。
-- 用途：可靠比较 BM25、向量、混合和 Cross-Encoder。
+- 下一次工具调用由前一次观察结果决定。
+- 同一任务在不同工具结果下可以走不同分支。
+- Agent 能在预算内停止，并能处理至少一种工具失败。
+- 最终结论不是语言模型猜测，每个关键判断都有实验引用。
 
-这是第一版的核心 Benchmark，也是项目对外展示时最可信的结果。
+## 2. 三种 Harness 必须分开
 
-### 次轨道：封闭语料检索评测
+```text
+Agent Evaluation Harness             给 Agent 出题并判定任务是否完成
+              ↓
+Agent Runtime Harness                控制循环、工具、权限、预算、Trace
+              ↓
+Search Evaluation Agent              计划 → 行动 → 观察 → 决策 → 报告
+              ↓
+Search Evaluation Harness            运行 Ranker、计算指标、保存 Run
+              ↓
+BM25 / Vector / Hybrid / Rerank       真正被测的搜索策略
+              ↓
+Amazon ESCI 数据                      Query、商品、E/S/C/I 标签
+```
 
-- 输入：从评测 Query 的已标注商品构造封闭商品池。
-- 任务：从封闭商品池召回相关商品，再进行排序。
-- 指标：Recall@K、nDCG@K、MRR@K。
-- 限制：必须在报告中写明商品池构造方式和标签覆盖范围。
+三者职责：
 
-只有在标签范围清晰时才报告 Recall。第一版不宣称复现或优化了 Amazon 线上搜索。
-
-### 标签增益规则
-
-Exact、Substitute、Complement、Irrelevant 到数值增益的映射必须配置化，并随每次实验记录。不得把某一种映射硬编码成唯一真理。主报告使用一套固定映射，敏感性分析再比较其他映射。
-
-## 3. 第一版技术方案
-
-| 层级 | 默认选择 | 作用 |
+| 组件 | 作用 | 不负责什么 |
 |---|---|---|
-| 数据处理 | Python 3.11、Polars/Pandas、Parquet | 清洗、抽样、切分和统计 ESCI |
-| 词法检索 | OpenSearch BM25 | 建立可解释的关键词基线 |
-| 向量检索 | OpenSearch k-NN 或 FAISS 适配器 | 语义召回与排序 |
-| Embedding | sentence-transformers 小型模型 | 本地批量生成商品向量 |
-| Rerank | Cross-Encoder 小型模型 | 对候选商品进行精排 |
-| API | FastAPI + Pydantic | 暴露评测和 Agent 工具 |
-| 实验存储 | SQLite + JSON/Parquet 产物 | 保存 Run、指标、配置与 Trace |
-| Web | React/Next.js | 搜索诊断台、实验对比和 Trace 页 |
-| 测试 | pytest | 指标、数据、工具协议和回归测试 |
+| Search Evaluation Harness | 用固定数据运行搜索并计算 nDCG、MRR、Success、延迟 | 不替 Agent 做诊断 |
+| Agent Runtime Harness | 控制 Agent 状态、工具权限、重试、预算、Trace 和停止条件 | 不判断搜索质量 |
+| Agent Evaluation Harness | 测试 Agent 的任务成功率、证据质量、恢复能力和成本 | 不代替运行时控制 |
 
-原则：评测内核不能依赖 LLM。即使没有模型 API Key，数据处理、四种排序策略、指标计算和实验对比也必须可以运行。
+评测内核必须独立于 LLM。没有模型 API Key 时，搜索、指标计算、Run 对比和 Replay 仍然必须可运行。
 
-建议建立独立目录，避免和当前仓库中的游戏、PRD Agent 混在一起：
+## 3. 数据与评测边界
 
-```text
-search-quality-agent/
-├── apps/
-│   ├── api/
-│   └── web/
-├── src/search_quality/
-│   ├── data/
-│   ├── ranking/
-│   ├── evaluation/
-│   ├── diagnosis/
-│   ├── agent/
-│   └── tracing/
-├── configs/
-├── data/
-│   ├── raw/          # 不提交 Git
-│   └── processed/    # 大文件不提交 Git
-├── evals/
-├── runs/             # 实验结果，不提交大文件
-├── tests/
-├── docs/
-├── Makefile
-└── README.md
-```
+ESCI 标签覆盖的是给定 Query 下的已判断候选商品，并不是完整 Amazon 商品库的相关性真值。因此项目分成两条轨道。
 
-## 4. 八阶段建设路线
+### 主轨道：已标注候选集重排
 
-| 阶段 | 周期 | 核心结果 | 状态 |
-|---|---:|---|---|
-| 0. 工程骨架与技术闸门 | 1–2 天 | 项目可以一条命令启动和测试 | **Completed (Local); OpenSearch Live Check Pending** |
-| 1. ESCI 数据管道 | 3–4 天 | 形成可复现的小样本和数据报告 | **Technical Gate Passed; Learning Check Pending** |
-| 2. 评测内核与基线 | 1 周 | 指标可信，BM25 基线可复现 | **Not Started** |
-| 3. 语义、混合与 Rerank | 1–1.5 周 | 至少四种策略可公平对比 | **Not Started** |
-| 4. Bad Case 诊断体系 | 1 周 | 错误可分类、可定位、可解释 | **Not Started** |
-| 5. 诊断 Agent 与工具协议 | 1 周 | Agent 可自主运行受控实验 | **Not Started** |
-| 6. Harness、Trace 与 Replay | 1 周 | 失败可追踪，实验可回放 | **Not Started** |
-| 7. Web 产品与作品集交付 | 1–1.5 周 | 完整 Demo、报告与讲解材料 | **Not Started** |
+- 对每个 Query 只重排其已标注候选商品。
+- 主要指标：nDCG@5/10、MRR@10、Success@1/5。
+- 用途：可靠比较 BM25、Vector、Hybrid 和 Rerank。
 
-## 5. 各阶段具体执行方法
+### 次轨道：封闭商品池检索
 
-### 阶段 0：工程骨架与技术闸门
+- 从标签边界明确的商品集合中执行召回。
+- 指标：Recall@K、nDCG@K、MRR@K。
+- 报告必须写明商品池构造方式，不能声称是全 Amazon Recall。
 
-> 完成记录（2026-08-25）：本地 BM25 + 精确余弦后端通过技术闸门，
-> OpenSearch 适配器和 Compose 已实现但因本机没有 Docker 尚未实机验证。
-> 验收证据见 `docs/STAGE_0_REPORT.md`，决策见
-> `docs/adr/001-search-backend.md`。
+目前已经能够对 482,105 个 ESCI 已判断商品建立标题 BM25 索引并搜索，但这只是可运行的探索原型，不代表 Amazon 线上搜索，也尚未成为正式基线报告。
 
-目标：先证明本机环境和关键依赖可用，不在大数据下载后才发现架构走不通。
+## 4. Agent-first 阶段总览
 
-具体工作：
+| 阶段 | 核心交付物 | Agent 体现 | 状态 |
+|---|---|---|---|
+| 0. 工程骨架与搜索 Smoke | 可重复启动的本地搜索后端 | 为工具化提供稳定接口 | **Completed (OpenSearch live check pending)** |
+| 1. ESCI 数据与实验边界 | 可复现 train/dev/test、Manifest、数据报告 | 给 Agent 提供可信数据边界 | **Technical gate passed; learning check pending** |
+| 2. Search Evaluation Harness | 指标、BM25 基线、Run 与对比报告 | Agent 可依赖的确定性工具层 | **In Progress** |
+| 3. 最小搜索评测 Agent | 首个计划—工具—观察—报告闭环 | 第一次可见的真实 Agent 行为 | **Not Started** |
+| 4. Agent Runtime Harness | 状态机、权限、预算、Trace、Replay | Agent 可控、可恢复、可复现 | **Not Started** |
+| 5. Agent Evaluation Harness | 黄金任务集和 Agent 成绩单 | 证明 Agent 不是偶然成功 | **Not Started** |
+| 6. 搜索策略与诊断实验室 | Multi-field BM25、Vector、Hybrid、Rerank、Bad Case | Agent 获得更多可组合实验工具 | **Not Started** |
+| 7. 诊断与优化 Agent | 自动提出假设、运行受控实验并给出决策 | 完整的搜索评测 Agent | **Not Started** |
+| 8. Web Agent 工作台与交付 | Agent 工作台、搜索对比页、部署与作品集 | 用户可观察计划、工具、证据和 Replay | **Not Started** |
 
-1. 新建 `search-quality-agent` 独立目录和 Git 边界。
-2. 固定 Python、Node 和依赖版本，提供 `.env.example`。
-3. 建立 `Makefile` 或等价命令：
-   - `make setup`
-   - `make test`
-   - `make data-sample`
-   - `make eval-baseline`
-   - `make api`
-   - `make web`
-4. 用 Docker 启动单节点 OpenSearch，验证：
-   - 创建索引；
-   - 写入 10 个商品；
-   - 执行一次 BM25；
-   - 执行一次向量查询。
-5. 如果 OpenSearch 在目标机器上无法稳定运行，立即切换到本地 BM25 + FAISS 适配器，不在这一阶段继续消耗时间。
-6. 建立最小 CI：格式检查、单元测试、禁止提交原始大数据和密钥。
+与 v0.1 相比，Agent MVP 从原阶段 5 前移到阶段 3；Trace、Replay 和 Agent Eval 也前移。向量与 Rerank 不再是 Agent 出现之前的前置条件。
 
-交付物：
+## 5. 各阶段执行与验收
 
-- 项目目录和 README。
-- 依赖锁文件、环境变量示例和启动命令。
-- 10 个商品的端到端 Smoke Test。
-- 技术决策记录 `docs/adr/001-search-backend.md`。
+### 阶段 0：工程骨架与搜索 Smoke
 
-验收门槛：
+已完成：本地 BM25、精确余弦后端、统一 Backend 接口、FastAPI、测试与 CI。OpenSearch 适配器已经实现，Docker 可用后补实机验证。
 
-- 新环境按照 README，30 分钟内可以启动。
-- `make test` 全部通过。
-- 同一 Query 连续运行两次返回一致结果。
-- 数据文件、Token 和模型密钥没有进入 Git。
+验收证据：
 
-### 阶段 1：ESCI 数据管道
+- `docs/STAGE_0_REPORT.md`
+- `docs/adr/001-search-backend.md`
+- 固定 10 商品 Smoke Test
 
-> 技术完成记录（2026-08-26）：已锁定并校验官方三个源文件，生成 English-US
-> Task 1 的 20-Query smoke（dev 内视图）、500-Query dev、20,388-Query train
-> 和 8,956-Query frozen test；真实数据报告见 `docs/STAGE_1_REPORT.md`。
-> 进入阶段 2 前仍须完成 Query 泄漏与不完整标注的 Owner 检查点。
+### 阶段 1：ESCI 数据与实验边界
 
-目标：把官方数据变成结构稳定、可抽样、可追踪的实验输入。
+已完成技术工作：
 
-具体工作：
+- English-US Task 1 共 601,354 条判断记录。
+- 20,388 个 train Query、500 个 dev Query、8,956 个 frozen test Query。
+- 20 Query smoke 是 dev 内固定视图，不是第四个 split。
+- 数据契约、字段完整性、重复判断、Query 泄漏和文件哈希均有自动检查。
 
-1. 编写数据下载说明和校验脚本，不手工改原始文件。
-2. 只先处理英文和小样本，跑通后再扩全量。
-3. 统一字段：
-   - `query_id`、`query_text`
-   - `product_id`、标题、描述、bullet point、品牌、颜色
-   - `esci_label`
-   - 数据集 split 和 locale
-4. 清理空标题、重复 Query—商品对、异常标签和不可解析记录。
-5. 保留官方 test；只从官方 train 按 Query 确定性地产生 train/dev，防止
-   同一 Query 泄漏到多个集合。
-6. 生成正式 train/dev/test 和一个开发视图：
-   - `smoke`：dev 内固定 20 个 Query，用于开发，不是第四个 split；
-   - `dev`：500 个 Query，用于快速实验；
-   - `train`：其余官方 train Query；
-   - `test`：官方 test，固定且冻结，只用于阶段验收。
-7. 输出数据分析：Query 长度、候选数、标签分布、字段缺失率、语言分布。
+进入阶段 2 的 Owner 门槛：
 
-交付物：
+- 能解释为什么 Query 不能跨 train/test。
+- 能解释为什么未标注商品不能自动视为 Irrelevant。
+- 能区分商品语料、相关性判断和正式 split。
 
-- 可重复运行的数据处理命令。
-- Parquet 格式的 train/dev/test，以及 dev 内 smoke 视图。
-- 数据字典和 EDA 报告。
-- 数据质量测试。
+验收证据：
 
-验收门槛：
+- `docs/STAGE_1_REPORT.md`
+- `docs/DATA_DICTIONARY.md`
+- `data/manifests/esci-stage1.json`
 
-- 重新运行处理脚本得到相同的记录数和校验值。
-- train/dev/test 不存在 Query 泄漏。
-- 每个评测 Query 都有候选商品和合法标签。
-- 报告明确说明 ESCI 标签覆盖限制。
+### 阶段 2：Search Evaluation Harness 与正式基线
 
-### 阶段 2：评测内核与 BM25 基线
+目标：先建立可信的“尺子”，再让 Agent 使用它。
 
-目标：先建立可信的“尺子”，再开始优化模型。
+执行：
 
-具体工作：
+1. 手写并测试 nDCG@5/10、MRR@10、Success@1/5。
+2. 配置化 E/S/C/I 增益映射和相关阈值。
+3. 定义统一 `Ranker` 输入输出契约。
+4. 实现随机、关键词重叠、标题 BM25 三条基线。
+5. 将全量标题 BM25 探索代码沉淀为可测试模块和 CLI。
+6. 对固定 smoke/dev 运行候选集重排。
+7. 为每次实验保存 Run Manifest：数据、代码、配置、指标、延迟和随机种子。
+8. 实现 `compare_runs`，输出总体变化和逐 Query 排名 Diff。
 
-1. 实现纯函数指标：
-   - nDCG@5、nDCG@10；
-   - MRR@10；
-   - Success@1、Success@5；
-   - 封闭语料轨道的 Recall@10、Recall@50。
-2. 为每个指标编写手算小样本单元测试，覆盖空结果、并列分数和无相关商品。
-3. 定义统一 `Ranker` 接口，输入输出不得因模型不同而改变。
-4. 实现三条基线：随机排序、简单关键词重叠、BM25。
-5. 每次实验生成 Run Manifest，至少记录：
-   - 数据版本与 split；
-   - 代码提交版本；
-   - Ranker 和全部参数；
-   - 标签增益映射；
-   - 指标、延迟、错误数；
-   - 生成时间和随机种子。
-6. 提供单 Query 结果和批量汇总结果。
+验收：
 
-交付物：
+- 指标代码与手算样例一致。
+- 同一配置重复运行得到相同结果。
+- BM25 在 dev 上优于随机基线。
+- 任一汇总指标都能下钻到 Query 和商品排名。
+- `make eval-baseline` 生成机器可读 Run 和人类可读报告。
 
-- 评测库和单元测试。
-- BM25 索引配置。
-- 第一份 Baseline 报告。
-- 可机器读取的 Run Manifest。
+本阶段结束时，搜索已经可评测，但还不是 Agent。
 
-验收门槛：
+### 阶段 3：最小搜索评测 Agent
 
-- 手算指标与代码结果一致。
-- 固定数据和配置重复运行，指标完全一致。
-- BM25 至少优于随机基线。
-- 可以从报告追溯到每条 Query 的排序结果。
+目标：尽早完成一个窄但真实的 Agent 垂直闭环。
 
-### 阶段 3：向量、混合排序与 Cross-Encoder
-
-目标：建立公平、可复现的策略对比，而不是只展示一个“最好看的数字”。
-
-具体工作：
-
-1. 生成商品文本模板，明确标题、品牌、类目和描述如何拼接。
-2. 批量生成并缓存 Embedding；模型名、版本和模板写入 Manifest。
-3. 实现向量排序。
-4. 使用 RRF 实现 BM25 + Vector 混合排序，先不手调复杂权重。
-5. 对混合排序 Top-N 使用 Cross-Encoder Rerank。
-6. 对比四种正式策略：
-   - BM25；
-   - Vector；
-   - Hybrid；
-   - Hybrid + Cross-Encoder。
-7. 按 Query 长度、品牌词、属性词、否定词和标签结构进行分层分析。
-8. 同时报告质量、P50/P95 延迟和计算成本。
-
-交付物：
-
-- 四种 Ranker 适配器。
-- 模型缓存和批处理脚本。
-- 策略对比报告。
-- 单 Query 排序差异视图所需的数据接口。
-
-验收门槛：
-
-- 四种策略使用同一测试集和同一标签增益规则。
-- 任何指标提升都能定位到具体 Query 和商品。
-- 至少找出一种策略的优势分群和劣势分群。
-- 无法证明提升时如实保留结论，不为展示效果修改测试集。
-
-### 阶段 4：Bad Case 诊断体系
-
-目标：把“分数下降”转化为可行动的问题类型。
-
-第一版错误分类：
-
-1. Query 意图理解错误。
-2. 品牌、型号、颜色、尺寸或价格属性不匹配。
-3. Exact 与 Substitute 顺序错误。
-4. Complement 被误排到主商品之前。
-5. Irrelevant 商品进入 Top-K。
-6. 词法检索漏掉语义相关商品。
-7. 向量检索被表面语义误导。
-8. Rerank 使原本正确的结果退化。
-9. 商品字段缺失或脏数据导致错误。
-10. 标签本身疑似有争议，标记为 `needs_review`，不得擅自改答案。
-
-具体工作：
-
-1. 定义 Bad Case JSON Schema。
-2. 自动生成“哪个商品从第几名变到第几名”的排序差异。
-3. 通过确定性规则先识别明显错误。
-4. 人工复核至少 30 个 Query，建立首批黄金诊断集。
-5. 将失败归因到数据、召回、排序、标签或评测配置。
-6. 为每个问题类型给出可验证的下一步实验，而不是泛泛建议。
-
-交付物：
-
-- Bad Case 分类字典。
-- 30 个以上人工复核案例。
-- 排序 Diff 和分群分析工具。
-- 第一份错误归因报告。
-
-验收门槛：
-
-- 每个自动诊断都有指标或排序证据。
-- 同一错误可以由另一名评审按定义复现分类。
-- `needs_review` 与真实系统错误分开统计。
-- 建议能够映射到一次具体实验。
-
-### 阶段 5：诊断 Agent 与工具协议
-
-目标：让 Agent 自主选择并调用受控工具完成诊断，而不是允许它任意执行代码。
-
-第一版工具：
+第一批只读工具：
 
 ```text
-inspect_query       查看 Query、候选商品和 ESCI 标签
-run_ranker          运行指定排序策略
-evaluate_ranking    计算单 Query 或批量指标
-compare_runs        比较两个实验
-analyze_bad_cases   按分类体系分析错误
-generate_report     生成有证据的诊断报告
-replay_run          回放一次历史实验
+inspect_query       查看 Query、候选商品、标签和字段
+run_ranker          使用指定基线创建一次 Run
+evaluate_run        读取单 Query 或批量指标
+compare_runs        比较两个 Run 和排名变化
 ```
 
-具体工作：
+Agent 循环：
 
-1. 为每个工具定义 Pydantic 输入、输出、错误码、超时和权限。
-2. Agent 只允许调用白名单工具，禁止 Shell 和任意 Python 执行。
-3. 采用有限状态流程：理解任务 → 选择实验 → 执行 → 验证证据 → 生成结论。
-4. 报告中的每个质量判断必须引用 Run ID、指标或具体商品排名。
-5. 当标签不足、工具失败或结果矛盾时，输出“无法确认”，不得补写证据。
-6. 建立 20 个 Agent 任务测试集，覆盖正常、无数据、超时、错误参数和结论冲突。
+```text
+用户目标
+  → 形成计划
+  → 选择工具
+  → 观察结果
+  → 根据证据继续、换工具或停止
+  → 输出带 Run ID 的报告
+```
 
-交付物：
+首批任务：
 
-- Agent 工具 Schema。
-- Agent 状态机或编排器。
-- 20 个任务的 Agent Eval 集。
-- 工具调用与最终报告测试。
+- 解释某个 Query 的 BM25 排名。
+- 找出 smoke 中退化最明显的 Query。
+- 比较随机、词重叠和 BM25，并判断基线是否有效。
+- 遇到缺失 Query 时说明证据不足，不虚构结果。
 
-验收门槛：
+验收：
 
-- 20 个任务均产生结构化终态。
-- 关键结论 100% 能追溯到实验数据。
-- 工具失败不会被伪装成成功。
-- Agent 不具备任意代码执行能力。
+- 至少 10 个固定 Agent 任务产生结构化终态。
+- 至少一个任务会根据中间结果走不同工具分支。
+- 关键质量结论全部引用 Query 或 Run 证据。
+- Agent 只能调用白名单工具，不能执行任意 Shell/Python。
+- 从第一版开始保留最小 Trace：计划、工具、观察和终态。
 
-### 阶段 6：Harness、Trace 与 Replay
+本阶段是作品第一次可以明确展示“Agent”的节点。
 
-目标：证明 Agent 不仅能成功一次，而且失败可定位、历史结果可复现。
+### 阶段 4：Agent Runtime Harness、Trace 与 Replay
 
-具体工作：
+目标：控制 Agent，而不是只让它成功演示一次。
 
-1. 为每次运行生成唯一 Trace ID。
-2. 记录用户任务、解析结果、工具调用、参数、输出摘要、耗时、错误和最终状态。
-3. 增加超时、有限重试、缓存、总预算和停止条件。
-4. 实现 Replay：默认读取历史快照，不重新调用外部模型。
-5. 为模型、Prompt、数据、索引和 Ranker 配置建立版本号。
-6. 注入故障测试：搜索超时、模型失败、空结果、损坏缓存和中途终止。
-7. 记录质量、成功率、P95 延迟和单次实验成本。
+执行：
 
-交付物：
+1. 定义有限状态：`planning → acting → observing → deciding → completed/failed`。
+2. 为工具定义 Pydantic Schema、权限、超时和错误码。
+3. 加入最大步数、Token/金额预算、有限重试和明确停止条件。
+4. 将阶段 3 的最小 Trace 扩展为完整 Trace ID、调用参数、观察、耗时、错误和终态。
+5. 保存数据、代码、模型、Prompt、工具和 Ranker 版本。
+6. 实现离线 Replay，默认读取历史快照，不重新调用模型。
+7. 注入超时、空结果、损坏输出和中途失败。
 
-- Trace Store 和查询接口。
-- Replay 命令。
-- 故障注入测试。
-- Harness 指标面板所需 API。
+验收：
 
-验收门槛：
+- 不存在无限循环或无上限重试。
+- 任一失败都能定位到具体状态和工具调用。
+- Replay 能还原历史工具结果和报告引用。
+- 相同 Trace 的证据不会因外部模型变化而消失。
 
-- 任一失败都能从 Trace 定位到具体阶段。
-- Replay 能还原历史排序、指标和报告引用。
-- 重试有上限，不产生无限循环。
-- 相同实验命中缓存时结果一致且成本下降。
+### 阶段 5：Agent Evaluation Harness
 
-### 阶段 7：Web 产品与作品集交付
+目标：证明 Agent 的任务完成能力，而不只评测搜索分数。
 
-目标：把已经验证的评测链路做成一个能独立演示的产品，而不是先画 UI 再补能力。
+任务集至少覆盖：
 
-第一版页面：
+- 正常诊断与 Run 对比。
+- 信息不足与冲突证据。
+- 工具超时、错误参数和空结果。
+- test 泄漏诱导。
+- 预算不足和必须提前停止的任务。
 
-1. **搜索诊断台**：输入或选择 Query，查看各策略排序。
-2. **实验对比页**：比较两个 Run 的指标、延迟和排名变化。
-3. **Bad Case 页**：按错误类型、Query 分群和严重度筛选。
-4. **Trace / Replay 页**：查看 Agent 工具调用和回放历史实验。
-5. **批量评测页**：选择固定数据集和策略，生成评测报告。
+Agent 指标：
 
-具体工作：
+| 指标 | 含义 |
+|---|---|
+| Task Success | 是否完成用户目标 |
+| Grounded Claim Rate | 关键结论中有可验证证据的比例 |
+| Tool Selection Accuracy | 是否选择了适合当前状态的工具 |
+| Recovery Rate | 工具失败后能否安全恢复或正确停止 |
+| Budget Compliance | 是否遵守步数、时间和 Token 预算 |
+| Replay Fidelity | 历史任务能否还原 |
 
-1. Web 只调用正式 API，不复制一套前端计算逻辑。
-2. 对耗时任务显示进度、取消、失败和重试状态。
-3. 对所有指标提供定义和数据范围说明。
-4. 准备一条稳定的 3 分钟演示脚本。
-5. 输出 PRD、架构图、评测报告、Bad Case 报告和项目复盘。
+验收：
 
-交付物：
+- 固定 Agent Eval 集可以一条命令运行。
+- 确定性规则优先，LLM Judge 不能作为唯一裁判。
+- 报告同时给出成功率、失败类型、成本和延迟。
+- 与固定脚本工作流比较，说明 Agent 的收益和额外成本。
+- 零越权工具调用，零 frozen-test 调参。
 
-- 可运行 Web Demo。
-- 项目 README 和部署说明。
-- PRD、技术架构、评测报告和演示脚本。
-- 面试用项目讲解材料。
+### 阶段 6：搜索策略与 Bad Case 实验室
 
-验收门槛：
+目标：把更强的搜索能力作为 Agent 可组合的实验工具，而不是孤立 Demo。
 
-- 用户不使用命令行即可完成一次完整诊断。
-- 页面展示的指标与离线评测结果一致。
-- 演示中的任一结论都能打开对应 Trace 或 Bad Case。
-- 新环境可以按文档完成部署。
+执行顺序：
 
-## 6. 每周节奏
+1. Multi-field BM25：标题、品牌、描述、bullet、型号精确字段。
+2. 词法规则：型号、连字符、同义词和必要的字段加权。
+3. 向量排序与 Embedding 缓存。
+4. BM25 + Vector 的 RRF Hybrid。
+5. Top-N Cross-Encoder Rerank。
+6. Bad Case Schema：数据、召回、排序、标签和评测配置问题。
+7. Query 分群：型号、品牌、属性、否定词、长短 Query。
+8. 将所有策略和诊断能力暴露为版本化工具。
 
-默认每周约 10 小时：
+验收：
 
-- 60%：当前阶段核心能力。
-- 20%：测试、Trace、文档和复现。
-- 10%：Bad Case 人工复核。
-- 10%：缓冲，不提前用于增加功能。
+- 四种策略使用同一数据和标签规则公平比较。
+- 每次提升都有改善 Case、退化 Case、延迟和成本。
+- 至少 30 个 Bad Case 经过人工复核并形成黄金诊断集。
+- Agent 可以调用工具获得证据，但不能直接修改正式配置。
 
-每周结束固定回答：
+### 阶段 7：诊断与优化 Agent
 
-1. 本周完成了什么可运行的交付物？
-2. 哪个指标或测试证明它有效？
-3. 最大的 Bad Case 或风险是什么？
-4. 下周只解决哪一个核心问题？
+目标：让 Agent 完成完整的搜索评测任务，而不是只解释一份已有报告。
 
-如果每周投入低于 8 小时，优先删除 Web 美化、实时商品数据源和全量数据实验，不删除评测内核、Trace 与 Replay。
+完整循环：
 
-## 7. 范围优先级
+```text
+发现问题
+→ 定位 Query 分群和 Bad Case
+→ 提出可证伪假设
+→ 选择受控实验
+→ 运行并比较 Run
+→ 检查总体提升与局部退化
+→ 建议接受、拒绝或继续实验
+```
+
+Agent 可以：
+
+- 选择预定义 Ranker、字段权重和安全参数空间。
+- 创建隔离实验 Run。
+- 比较质量、延迟和成本。
+- 给出需要人工审批的配置建议。
+
+Agent 不可以：
+
+- 修改 frozen test、相关性标签或历史 Run。
+- 任意执行代码或访问未授权数据。
+- 自动部署、修改线上索引或跳过人工审批。
+- 用无法追溯的常识替代实验结果。
+
+验收：
+
+- 从自然语言任务到证据报告能够端到端完成。
+- 至少一个任务包含假设失败后的改道。
+- 最终建议同时考虑总体指标、Query 分群、延迟和成本。
+- Agent Evaluation Harness 能稳定复现成功与失败结论。
+
+### 阶段 8：Web Agent 工作台与作品集交付
+
+页面分为两类，避免把搜索 Demo 当成 Agent：
+
+1. **搜索对比页**：只保留优化前/后的搜索框和结果，供用户感受差异。
+2. **Agent 工作台**：输入诊断任务，展示计划、工具调用、观察、Run 对比和最终建议。
+3. **实验页**：查看指标、延迟、排名 Diff 和 Query 分群。
+4. **Trace / Replay 页**：检查历史 Agent 路径和失败位置。
+5. **批量评测页**：运行 Search Harness 或 Agent Eval Harness。
+
+验收：
+
+- 用户无需命令行即可完成一次 Agent 诊断。
+- 页面展示的指标与离线 Run 完全一致。
+- 三分钟演示中能看见 Agent 根据工具结果改变下一步行动。
+- 任一结论都能打开对应 Run、Query 或 Trace。
+- README、架构图、评测报告、演示脚本和部署说明齐全。
+
+## 6. Now / Next / Later
+
+### Now
+
+- 完成阶段 1 Owner 学习门槛。
+- 手写并测试 nDCG、MRR、Success。
+- 固化正式 BM25 基线和 Run Manifest。
+- 生成第一份 dev Baseline 报告。
+
+### Next
+
+- 工具化 `inspect_query/run_ranker/evaluate_run/compare_runs`。
+- 完成最小 Agent 垂直闭环。
+- 增加 Runtime Harness、Trace、Replay 和 Agent Eval 集。
+
+### Later
+
+- Multi-field BM25、Vector、Hybrid、Rerank。
+- Bad Case 黄金集和自动实验 Agent。
+- Web Agent 工作台、部署和作品集交付。
+
+## 7. 关键学习路线
+
+| 阶段 | Owner 必须掌握 |
+|---|---|
+| 1 | 数据泄漏、不完整标签、商品语料与判断集的区别 |
+| 2 | DCG/nDCG、MRR、Success、离线评测边界 |
+| 3 | Agent 与固定工作流、工具调用和证据约束 |
+| 4 | 状态机、权限、超时、重试、预算、Trace、Replay |
+| 5 | Agent 任务成功率、裁判可靠性和 Eval 污染 |
+| 6 | Multi-field BM25、向量、RRF、Rerank、召回与精排 |
+| 7 | 假设驱动实验、局部退化、自动化与人工审批边界 |
+| 8 | API/前端边界、异步任务和三分钟证据化讲解 |
+
+完成状态记录在 `docs/LEARNING_CHECKPOINTS.md`。不要求 Owner 手写所有工程代码，但必须能解释会影响产品和实验判断的概念。
+
+## 8. 范围优先级
 
 ### Must Have
 
-- ESCI 可复现数据管道。
-- 候选集重排评测。
-- BM25、Vector、Hybrid、Cross-Encoder 四种策略。
-- nDCG、MRR 等可信指标。
-- Bad Case 分类和人工黄金集。
-- 受控 Agent 工具调用。
-- Trace、Replay 和版本记录。
-- 能完成主流程的 Web Demo。
+- 可复现 ESCI 数据和候选集重排评测。
+- Search Evaluation Harness 与正式 BM25 基线。
+- 最小 Agent 计划—工具—观察闭环。
+- Agent Runtime Harness、Trace、Replay。
+- Agent Evaluation Harness 和固定任务集。
+- BM25、Vector、Hybrid、Rerank 对比。
+- 诊断与受控实验 Agent。
+- 能展示 Agent 行为的 Web 工作台。
 
 ### Should Have
 
 - 封闭语料检索评测。
-- 批量实验和 Query 分群分析。
+- Query 分群、Bad Case 黄金集和回归门禁。
 - 延迟、成本和稳定性指标。
-- 实验配置对比和回归门禁。
+- 人工审批后的实验配置提案。
 
 ### Could Have
 
-- eBay Browse API 实时商品模式。
 - 100–200 条自建中文测试集。
-- 云端部署和多人共享。
-- Human-in-the-loop 审批后更新实验配置。
+- 云端多人共享。
+- 更多 Embedding/Rerank 模型适配器。
+- 真实电商 API 的只读演示模式。
 
 ### 本周期明确不做
 
-- 抓取 Amazon、淘宝、TikTok Shop 或其他商城网页。
-- 声称复现真实 Amazon 搜索系统。
-- 个性化搜索、广告排序和推荐系统。
-- 训练或微调大型模型。
-- 自动修改线上搜索配置。
-- 第一版自动购买或执行商业操作。
+- 抓取 Amazon、淘宝、TikTok Shop 等商城网页。
+- 声称复现或优化了 Amazon 线上搜索。
+- 个性化、广告排序和推荐系统。
+- 自动修改生产搜索配置或自动部署。
+- 训练大型模型或让 Agent 任意执行 Shell/Python。
 
-## 8. 主要风险与应对
+## 9. 风险与门禁
 
-| 风险 | 早期信号 | 应对方案 |
-|---|---|---|
-| ESCI 数据过大、处理过慢 | smoke 数据都无法快速迭代 | 永远先跑 20/500 Query，再扩全量 |
-| 标签不完整导致 Recall 失真 | 检索到合理商品却没有标签 | 分开重排与封闭检索轨道，报告覆盖范围 |
-| OpenSearch 环境成本过高 | 阶段 0 两天仍不稳定 | 切换本地 BM25 + 精确余弦适配器；规模需要时再引入 FAISS |
-| 模型下载或推理过慢 | 单次实验无法在合理时间完成 | 使用小模型、批处理、缓存和 Top-N Rerank |
-| 指标提升来自数据泄漏 | dev 很好、冻结 test 明显下降 | 按 Query 切分，冻结 test，不为调参反复查看 |
-| Agent 变成语言模型总结器 | 结论无法指向 Run 或商品 | 强制工具协议和证据引用，无证据即无法确认 |
-| 项目范围持续膨胀 | 提前讨论实时 API、云部署和多语言 | Must Have 完成前不启动 Could Have |
+| 风险 | 应对 |
+|---|---|
+| 项目最后只剩搜索 Demo | 阶段 3 提前交付最小 Agent；Web 必须展示计划和工具 Trace |
+| 固定工作流冒充 Agent | 验收条件要求基于观察分支、失败恢复和预算停止 |
+| Agent 语言流畅但结论无证据 | 关键判断强制引用 Query、Run 或 Trace |
+| 指标或标签边界错误 | 先完成确定性 Search Harness，再允许 Agent 使用 |
+| LLM Judge 自说自话 | 确定性断言优先，人工黄金集校准，Judge 不能单独裁决 |
+| test 被反复用于优化 | frozen test 权限隔离；Agent 工具默认只允许 smoke/dev |
+| Agent 失控或循环 | 白名单工具、最大步数、预算、有限重试和终态 |
+| 搜索策略扩张拖慢 Agent | Vector/Rerank 后置；BM25 足够支持 Agent MVP |
 
-## 9. 发布与回归规则
+以下任一情况不进入下一阶段：
 
-每次重要改动必须留下：
+- 指标没有手算单元测试。
+- Run 无法复现或没有版本记录。
+- Agent 关键结论无法追溯到证据。
+- Agent 可以越过权限、预算或 frozen test 门禁。
+- 失败被吞掉，或 Trace 无法定位失败步骤。
 
-1. 代码和配置版本。
-2. 对应 Run Manifest。
-3. 固定 test 集的前后对比。
-4. 至少一个改善 Case 和一个潜在退化 Case。
-5. 延迟、错误率和成本变化。
-6. 是否达到当前阶段验收门槛的结论。
+## 10. 当前唯一下一步
 
-出现以下任一情况，不进入下一阶段：
+完成阶段 2 的第一小步：用手算样例实现并验证 nDCG、MRR 和 Success 指标，然后用固定 smoke/dev 数据生成标题 BM25 的第一份正式 Baseline Run。
 
-- 指标实现没有手算测试。
-- 实验无法复现。
-- 结论无法追溯到数据。
-- 测试集发生未记录的修改。
-- 失败被吞掉或 Trace 不完整。
-
-## 10. 下一步
-
-阶段 1 的数据技术闸门已于 2026-08-26 通过：真实 ESCI 数据已校验并生成
-确定性的 train/dev/frozen-test、smoke 开发视图、Manifest、数据字典和 EDA
-报告。下一步先完成 Owner 对 Query 级泄漏与不完整标注的检查问题；通过后
-进入**阶段 2：评测内核与 BM25 基线**，先用手算样例验证指标，不提前优化
-排序模型。OpenSearch 实机验证在 Docker 可用后单独补做。
+在这份 Run 成为可信证据后，立即进入阶段 3 的四工具 Agent 垂直闭环，不提前等待 Vector、Hybrid 或 Web 美化。
