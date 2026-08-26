@@ -1,7 +1,8 @@
 # Search Engine EVA Agent
 
 **Status:** Active  
-**Roadmap position:** Stage 1 technical gate passed; owner checkpoint pending
+**Roadmap position:** Stage 2 Search Evaluation Harness in progress; Stage 1
+owner checkpoint pending
 **Primary dataset:** Amazon Shopping Queries ESCI  
 **Repository:** https://github.com/Shaw485/search-engine-eva-agent
 
@@ -29,6 +30,19 @@ The collaborator must:
 The canonical learning plan and completion log live in
 `docs/LEARNING_CHECKPOINTS.md`.
 
+## Decision provenance preference
+
+The owner explicitly requires interview-safe separation between owner work and
+Codex work. For material decisions, record requirement origin, proposal source,
+final decision maker, implementation owner, and validator separately in
+`docs/CONTRIBUTION_LOG.md`.
+
+An owner approval such as “可以” means the owner made the adoption decision; it
+does not mean the owner originated the proposal. Installation, deployment, and
+commit permission are authorizations rather than architecture contributions.
+Generated code and tests remain attributed to Codex unless direct evidence says
+otherwise.
+
 ## Current engineering state
 
 - Stage 0 mandatory local path accepted on 2026-08-25.
@@ -38,7 +52,14 @@ The canonical learning plan and completion log live in
   English-US train/dev/frozen-test data plus a 20-Query smoke view on 2026-08-26.
 - Stage 1 aggregate evidence lives in `docs/STAGE_1_REPORT.md` and
   `data/manifests/esci-stage1.json`; large raw and processed data stay ignored.
+- Stage 2 now includes hand-verified nDCG, MRR, and Success metrics; the
+  versioned `esci-primary-v1` relevance policy; and a deterministic title-BM25
+  candidate-reranking smoke run with evidence in `docs/STAGE_2_SMOKE_REPORT.md`.
+- The Stage 2 smoke result is nDCG@5 0.659606, nDCG@10 0.719098, MRR@10
+  0.851667, Success@1 0.75, and Success@5 1.0. It is a judged-candidate rerank,
+  not the separate 482,105-product exploratory full-corpus search.
 - The Stage 1 owner learning checkpoint remains pending until the Query leakage
   and incomplete-judgment question in `docs/LEARNING_CHECKPOINTS.md` is answered.
-- Do not begin Stage 2 metrics, Web, semantic models, or Agent orchestration
-  before that owner checkpoint is complete.
+- Do not promote the smoke run to the full dev baseline, open the frozen test,
+  or begin later ranking/Agent claims before the relevant owner checkpoints are
+  complete.

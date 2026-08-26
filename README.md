@@ -26,6 +26,7 @@ explicit pending integration check, not an implicit fallback or a claimed pass.
 - Data dictionary: [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md)
 - Backend decision: [docs/adr/001-search-backend.md](docs/adr/001-search-backend.md)
 - Required learning: [docs/LEARNING_CHECKPOINTS.md](docs/LEARNING_CHECKPOINTS.md)
+- Decision and contribution provenance: [docs/CONTRIBUTION_LOG.md](docs/CONTRIBUTION_LOG.md)
 - Portfolio deployment: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 - Live Stage 0 experience: [shawspace.cn/search-eval.html](https://shawspace.cn/search-eval.html)
 

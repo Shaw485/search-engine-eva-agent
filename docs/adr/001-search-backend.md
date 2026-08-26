@@ -3,6 +3,11 @@
 **Status:** Accepted for Stage 0
 **Date:** 2026-08-25
 **Deciders:** Project owner and implementation collaborator
+**Provenance:** The backend options and selected technical design were proposed
+and implemented by Codex; installation and deployment continuation were
+authorized by the owner. See D-009 in
+[`docs/CONTRIBUTION_LOG.md`](../CONTRIBUTION_LOG.md) for the stricter attribution
+record. The Git author is not evidence of who designed or wrote the change.
 
 ## Context
 
