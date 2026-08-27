@@ -44,6 +44,7 @@
 | D-011 | 以后所有重要决定都要区分 Owner 决策、Codex 提案/实现和共同迭代，供面试核验 | **Owner 主动提出** | Owner 定义要求；Codex 设计五角色台账 | **Owner** | Codex 建立本文并把维护规则写入项目指令 | Owner-originated + Codex operationalization |
 | D-012 | 软件模块必须具备可独立启停、过滤和排障的结构化日志；默认保护敏感信息并控制生产噪声与保留 | **Owner 通过项目开发指令主动提出** | Owner 定义质量要求；Codex 设计标准库日志、模块级开关、Trace ID、脱敏和 journald 方案 | **Owner 决定必须具备该能力**；具体技术设计由 Codex 完成 | Codex 实现 `observability.py`、API/CLI 埋点、安全错误、部署配置、文档与测试 | Owner-originated requirement + Codex operationalization |
 | D-013 | Stage 2 三条 smoke 比较器共用一个 label-blind Harness：固定种子随机、标题关键词重叠、标题 BM25；在 Owner 数据边界检查点完成前代码硬锁 500-Query dev | 路线图需要可解释的质量下限和防止过早查看 dev | **Codex 设计** | Owner 的“继续”只授权继续执行，没有证据表明其独立选择了算法、seed、计分或门禁实现 | Codex 实现统一 Ranker 契约、比较器、CLI、共享门禁、172 项测试和三条 smoke Run；实现 commit `22877b0` | Codex-designed/implemented; Owner operational authorization |
+| D-014 | Stage 2 `compare_runs` 只比较同一可信数据/Policy/Query/候选证据的两个 Run；统一采用 candidate-baseline delta，保留逐 Query 和逐商品排名 Diff，并把本地 Run store 与 Agent registry 信任边界分开 | 路线图需要让评测结论可验证、可下钻，并为 Agent 工具提供安全证据 | **Codex 设计**；Owner 的“继续”授权执行 | 当前采用为 smoke Harness；Owner 尚未对 random/BM25/overlap 的结果作质量决策 | Codex 实现严格校验、指标复算、CLI、原子不可变制品、结构化诊断和 205 项测试；commit `8df54b8`；smoke evidence 见 `docs/STAGE_2_SMOKE_REPORT.md` | Codex-designed/implemented; Owner operational authorization and pending review |
 
 ### 尚未拍板的提案
 
@@ -69,6 +70,8 @@
 - 生成并修改截至目前绝大多数代码、测试、配置、报告和部署材料。
 - 实现本地 BM25/向量 smoke、OpenSearch 适配、ESCI 数据管线、指标内核、相关性政策和候选集 BM25 基线。
 - 设计并实现统一 Ranker Harness、随机/关键词重叠比较器、dev 学习门禁，以及模块化结构化诊断能力。
+- 设计并实现受信 Run 比较契约、总体/逐 Query/逐商品 Diff、本地 Run store
+  防线与未来 Agent registry 边界。
 - 运行自动测试、数据校验和 smoke 实验，并把证据写入报告和 Git commits。
 - 讲解搜索原理、提示关键知识，并维护学习检查点和本归因台账。
 

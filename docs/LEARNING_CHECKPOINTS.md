@@ -52,6 +52,8 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
 
 ## 当前待验证问题
 
+### Stage 1：数据边界
+
 - 阶段：1. ESCI 数据
 - 提醒日期：2026-08-26
 - 问题：如果 `wireless mouse` 同时出现在 train 和 test，为什么 test 高分
@@ -59,6 +61,20 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
   自动当成 Irrelevant，也不能据此宣称全 Amazon 商品库 Recall？
 - 状态：**Awaiting owner answer**
 
+### Stage 2：指标与局部退化
+
+- 阶段：2. Search Evaluation Harness
+- 提醒日期：2026-08-27
+- 证据：`comparison-5c59968c1cd7` 中 BM25 相对 random 的平均
+  nDCG@10 提升 `0.173312`，但 20 个 Query 中仍有 5 个退化；Query
+  `15281` 的 nDCG@10 下降 `0.322992`。`comparison-dc727a4e03ca` 中
+  BM25 相对 overlap 的 nDCG@10 更高，但 MRR@10 与 Success@1 更低。
+- 问题：为什么“平均 nDCG@10 上升”不能直接推出 BM25 已经胜出？如果产品
+  更看重首个相关商品，而不是前 10 名的分级相关性，你会优先看哪个指标，
+  下一步要检查哪些 Bad Case？另外，为什么三条策略都为 1.0 的 Success@5
+  在这个 smoke 上没有决策价值？
+- 状态：**Awaiting owner answer**
+
 执行保护：当前 Stage 2 共享正式评测入口与 CLI 都只允许 smoke。Owner 用
-自己的话完成上述回答并记录证据后，才通过代码变更解锁 500-Query dev；
-“继续执行”不视为知识验证。
+自己的话完成 Stage 1 数据边界回答和 Stage 2 指标练习并记录证据后，才
+通过代码变更解锁 500-Query dev；“继续执行”不视为知识验证。
