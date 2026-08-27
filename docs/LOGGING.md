@@ -17,7 +17,7 @@ stderr. Normal CLI results remain on stdout.
 | `api` | HTTP request boundary and public failure correlation | `INFO` in systemd |
 | `backend` | Local/OpenSearch smoke lifecycle | `WARNING` |
 | `data` | Stage 1 validation and build lifecycle | `WARNING` |
-| `evaluation` | Profile validation, baseline execution and Run storage | `WARNING` |
+| `evaluation` | Baseline/Run comparison, validation and artifact storage | `WARNING` |
 | `ranking` | Per-Query Ranker diagnostics | `OFF` |
 
 The library default is `WARNING`. Verbose ranking events are opt-in because one
@@ -45,6 +45,11 @@ JSON diagnostics separate from the normal result:
   --log-module ranking=DEBUG \
   2>evaluation-debug.jsonl
 
+.venv/bin/python -m search_quality.evaluation.compare_cli \
+  --profile smoke \
+  --log-module evaluation=INFO \
+  2>comparison-debug.jsonl
+
 .venv/bin/python -m search_quality.data.cli --validate-only \
   --log-module data=INFO 2>data-validation.jsonl
 
@@ -71,9 +76,26 @@ JSON events include:
 - Run ID and aggregate metrics after a completed evaluation;
 - duration plus stable error code and error type at execution boundaries.
 
+Run comparison emits `comparison_command_started`,
+`run_comparison_started`, `run_comparison_completed`, and
+`comparison_artifacts_stored` on success. These events contain validated Run
+IDs, counts and the comparison ID, but never Query text, product titles, file
+paths, ranked lists or raw exception messages. A failed command emits only
+`comparison_command_failed` with a stable error code, exception type and
+allowlisted failure stage. `run_comparison_completed` means the deterministic
+result exists in memory; only `comparison_artifacts_stored` means its JSON,
+Markdown and latest pointer were all persisted.
+
 Per-Query debug events use numeric Query IDs and counts. They do not include raw
 Query text, product titles, descriptions, vectors, request bodies or result
 payloads.
+
+Comparison JSON and Markdown are evidence artifacts, not sanitized logs. They
+intentionally contain raw Query text, product IDs, labels, scores and full
+ranking differences. `runs/` is Git-ignored; review artifacts before sharing,
+and never commit or upload a private/user-Query Run without a separate privacy
+review. Content-addressed IDs detect content changes but are not signatures or
+proof of which program produced a ranking.
 
 ## Privacy and public errors
 
@@ -119,7 +141,11 @@ systemd-analyze cat-config systemd/journald.conf
 
 1. `data`: rerun `--validate-only` with only `data=DEBUG`.
 2. `evaluation`: use the fixed smoke profile with `evaluation=DEBUG` and keep
-   `ranking=OFF` unless a specific Query needs inspection.
+   `ranking=OFF` unless a specific Query needs inspection. For a Run comparison,
+   use `compare_cli` with `evaluation=INFO` and filter by `comparison_id` or the
+   two validated Run IDs. Filter by `operation == "stage2_compare_runs"` to
+   isolate one command type. A validation failure occurs before
+   `run_comparison_started`, so only command start/failure events are expected.
 3. `ranking`: enable `ranking=DEBUG`; filter by `query_id`. Raw Query text is in
    the immutable Run evidence rather than duplicated into logs.
 4. `backend`: run the ten-product local smoke with `backend=DEBUG`; OpenSearch
@@ -129,7 +155,9 @@ systemd-analyze cat-config systemd/journald.conf
 
 `tests/test_observability.py` verifies JSON structure, module isolation,
 redaction variants, error classification, stable events, low-noise defaults and
-handler de-duplication. API tests verify that successful, backend-failed and
-unhandled requests remain traceable without logging Query strings or exposing
-internal error causes. Deployment contract tests keep Uvicorn access logging
-disabled in both local and systemd entry points.
+handler de-duplication. Comparison CLI tests verify success correlation, real
+validation and storage failures, failure stages, and that all Query/product
+evidence plus paths stay out of stderr. API tests verify that successful,
+backend-failed and unhandled requests remain traceable without logging Query
+strings or exposing internal error causes. Deployment contract tests keep
+Uvicorn access logging disabled in both local and systemd entry points.

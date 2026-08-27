@@ -149,7 +149,10 @@ ESCI 标签覆盖的是给定 Query 下的已判断候选商品，并不是完�
 当前安全进度：三条 Ranker 已接入统一 Harness，但只允许在固定 smoke
 profile 上执行。Owner 数据边界检查点记录完成前，共享正式评测入口与 CLI
 都在读取数据前拒绝 500-Query dev；frozen test 始终不进入 routine CLI。
-这一窄增量尚未实现第 8 项 `compare_runs`，因此不表示阶段 2 已完成。
+第 8 项 `compare_runs` 已在 smoke 范围实现：它对照受信 Stage 1 Manifest
+校验两个 Run，复算指标，并输出总体变化、逐 Query 指标变化和逐商品排名
+Diff。阶段 2 仍未完成，因为 Owner 学习检查点、500-Query dev 正式基线与
+Bad Case 判断尚未完成。
 
 验收：
 
@@ -157,7 +160,8 @@ profile 上执行。Owner 数据边界检查点记录完成前，共享正式评
 - 同一配置重复运行得到相同结果。
 - BM25 在 dev 上优于随机基线。
 - 任一汇总指标都能下钻到 Query 和商品排名。
-- `make eval-baseline` 生成机器可读 Run 和人类可读报告。
+- `make eval-baseline` 生成机器可读 Run，`make compare-runs` 生成机器可读
+  Diff 和人类可读报告。
 
 本阶段结束时，搜索已经可评测，但还不是 Agent。
 
@@ -173,6 +177,9 @@ run_ranker          使用指定基线创建一次 Run
 evaluate_run        读取单 Query 或批量指标
 compare_runs        比较两个 Run 和排名变化
 ```
+
+Agent 工具只接收受控 registry 中已验证的 Run ID，不接收任意文件路径。
+Stage 2 的本地 Run 内容哈希用于完整性检查，不是生成者身份认证。
 
 Agent 循环：
 

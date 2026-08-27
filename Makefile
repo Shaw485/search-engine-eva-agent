@@ -8,7 +8,7 @@ EVAL_RANKER ?= all
 
 .PHONY: help setup format lint policy check test smoke data-sample data-download \
 	data-esci-validate data-esci-build api opensearch-up opensearch-down \
-	smoke-opensearch eval-baseline web clean
+	smoke-opensearch eval-baseline compare-runs web clean
 
 help:
 	@echo "setup             Create the virtual environment and install dependencies"
@@ -28,6 +28,7 @@ help:
 	@echo "opensearch-down   Stop the optional OpenSearch service"
 
 	@echo "eval-baseline     Run all three Stage 2 smoke comparators"
+	@echo "compare-runs      Compare the latest random and BM25 smoke Runs"
 
 setup:
 	$(PYTHON) -m venv $(VENV)
@@ -81,6 +82,10 @@ opensearch-down:
 eval-baseline:
 	$(VENV_PYTHON) -m search_quality.evaluation.cli \
 		--profile "$(EVAL_PROFILE)" --ranker "$(EVAL_RANKER)"
+
+compare-runs:
+	$(VENV_PYTHON) -m search_quality.evaluation.compare_cli \
+		--profile "$(EVAL_PROFILE)"
 
 web:
 	@echo "Stage 7 command reserved: the Web product is not implemented in Stage 0." >&2

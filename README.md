@@ -12,9 +12,11 @@ gate is complete, while its owner learning check remains pending. The repository
 now includes hand-verified nDCG, MRR and Success metrics, the versioned
 `esci-primary-v1` relevance policy, a shared label-blind Ranker Harness, and
 deterministic random, keyword-overlap and title-BM25 comparators. Routine Stage
-2 execution is currently smoke-only: the 500-Query dev profile is code-locked
-until the Owner data-boundary checkpoint is recorded, and the 8,956-Query frozen
-test remains unavailable to tuning runs.
+2 now also has a strict `compare_runs` path: it verifies both Runs against the
+trusted Stage 1 manifest, recomputes their metrics, and emits aggregate plus
+per-Query ranking differences. Execution remains smoke-only: the 500-Query dev
+profile is code-locked until the Owner data-boundary checkpoint is recorded, and
+the 8,956-Query frozen test remains unavailable to tuning runs.
 
 The optional OpenSearch 3.8.0 adapter, mapping, and Apple Silicon-compatible
 Compose profile are implemented. Live container verification remains pending
@@ -54,13 +56,23 @@ make test
 make data-sample
 make smoke
 make eval-baseline
+make compare-runs
 EVAL_RANKER=title-bm25 make eval-baseline
 QUERY="iphone 15 pro case" make smoke
 ```
 
 `make eval-baseline` runs all three deterministic comparators on the fixed
 20-Query smoke profile. The smoke results validate the Harness; they are not a
-formal quality decision.
+formal quality decision. `make compare-runs` then compares the latest random
+baseline with title BM25 and stores immutable JSON plus a Markdown diagnostic
+report under ignored `runs/comparisons/`.
+
+The Stage 2 CLI trusts the local operator and only loads artifacts directly from
+the project's ignored `runs/` store. Run and comparison IDs are content hashes:
+they detect accidental or conflicting content changes, but they are not digital
+signatures and do not prove that a ranking was produced by the declared code.
+The Stage 3 Agent therefore will accept validated Run IDs from a controlled
+registry, never arbitrary filesystem paths.
 
 The Stage 1 data path is separate so CI never downloads the 1.16 GB source:
 
@@ -175,8 +187,8 @@ not presented as full-catalog recall.
 
 ## Next step
 
-Complete the Stage 1 Owner checkpoint on Query-level leakage and incomplete
-judgments, then explicitly unlock and run the three comparators on the fixed
-500-Query dev profile. Complete the Stage 2 metric check before interpreting
-that comparison or entering the Agent MVP. Frozen test stays closed until a
-milestone release gate.
+Use the smoke comparison report to complete the Stage 1 Owner checkpoint on
+Query-level leakage and incomplete judgments and the Stage 2 metric exercise.
+Only then explicitly unlock and run the same three comparators plus
+`compare_runs` on the fixed 500-Query dev profile. Frozen test stays closed until
+a milestone release gate; the Agent MVP follows the accepted dev baseline.

@@ -91,10 +91,10 @@ def test_smoke_baseline_is_complete_deterministic_and_bounded() -> None:
     policy = RelevancePolicy.from_path(POLICY_PATH)
     profile = _smoke_profile()
     first = run_candidate_title_bm25_baseline(
-        profile, policy=policy, code_revision="test-revision"
+        profile, policy=policy, code_revision="a" * 40
     )
     second = run_candidate_title_bm25_baseline(
-        profile, policy=policy, code_revision="test-revision"
+        profile, policy=policy, code_revision="a" * 40
     )
 
     assert first == second
@@ -126,6 +126,15 @@ def test_smoke_baseline_is_complete_deterministic_and_bounded() -> None:
         assert aggregate == pytest.approx(expected)
 
 
+def test_formal_baseline_requires_a_full_git_revision() -> None:
+    with pytest.raises(ValueError, match="full lowercase Git commit SHA"):
+        run_candidate_title_bm25_baseline(
+            _smoke_profile(),
+            policy=RelevancePolicy.from_path(POLICY_PATH),
+            code_revision="test-revision",
+        )
+
+
 @pytest.mark.parametrize("ranker_name", RANKER_NAMES)
 def test_every_smoke_comparator_is_deterministic_complete_and_label_blind(
     ranker_name: str,
@@ -135,13 +144,13 @@ def test_every_smoke_comparator_is_deterministic_complete_and_label_blind(
     first = run_candidate_baseline(
         profile,
         policy=policy,
-        code_revision="test-revision",
+        code_revision="a" * 40,
         ranker_name=ranker_name,
     )
     second = run_candidate_baseline(
         profile,
         policy=policy,
-        code_revision="test-revision",
+        code_revision="a" * 40,
         ranker_name=ranker_name,
     )
 
@@ -169,13 +178,13 @@ def test_random_seed_is_recorded_and_changes_run_identity() -> None:
     first = run_candidate_random_baseline(
         profile,
         policy=policy,
-        code_revision="test-revision",
+        code_revision="a" * 40,
         seed=17,
     )
     second = run_candidate_random_baseline(
         profile,
         policy=policy,
-        code_revision="test-revision",
+        code_revision="a" * 40,
         seed=18,
     )
 
@@ -195,7 +204,7 @@ def test_evaluation_logs_trace_run_and_metrics_without_query_text() -> None:
         run = run_candidate_baseline(
             _smoke_profile(),
             policy=RelevancePolicy.from_path(POLICY_PATH),
-            code_revision="test-revision",
+            code_revision="a" * 40,
             ranker_name="keyword-overlap",
         )
 
@@ -221,7 +230,7 @@ def test_ranking_debug_can_be_isolated_from_evaluation_logs() -> None:
         run_candidate_baseline(
             _smoke_profile(),
             policy=RelevancePolicy.from_path(POLICY_PATH),
-            code_revision="test-revision",
+            code_revision="a" * 40,
             ranker_name="random",
         )
 
@@ -255,7 +264,7 @@ def test_routine_baseline_rejects_relabelled_official_test_data(
         run_candidate_baseline(
             profile,
             policy=policy,
-            code_revision="test-revision",
+            code_revision="a" * 40,
             ranker_name=ranker_name,
         )
 
@@ -269,12 +278,12 @@ def test_baseline_is_independent_of_input_row_order(tmp_path: Path) -> None:
 
     policy = RelevancePolicy.from_path(POLICY_PATH)
     ordered = run_candidate_title_bm25_baseline(
-        _smoke_profile(), policy=policy, code_revision="test-revision"
+        _smoke_profile(), policy=policy, code_revision="a" * 40
     )
     shuffled = run_candidate_title_bm25_baseline(
         _synthetic_profile(shuffled_path, pl.DataFrame(rows, schema=frame.schema)),
         policy=policy,
-        code_revision="test-revision",
+        code_revision="a" * 40,
     )
     assert shuffled["metrics"] == ordered["metrics"]
     assert shuffled["per_query"] == ordered["per_query"]
@@ -303,7 +312,7 @@ def test_query_without_relevant_products_still_counts_in_macro_average(
     run = run_candidate_title_bm25_baseline(
         _synthetic_profile(path, frame),
         policy=policy,
-        code_revision="test-revision",
+        code_revision="a" * 40,
     )
     assert run["metrics"]["ndcg@10"] == pytest.approx(0.5)
     assert run["metrics"]["mrr@10"] == pytest.approx(0.5)

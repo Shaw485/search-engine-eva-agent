@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
-import json
 import logging
-import os
-import subprocess
-import tempfile
 from pathlib import Path
 
+from search_quality.evaluation.artifacts import (
+    atomic_write_text,
+    require_clean_code_revision,
+    write_immutable_json,
+)
 from search_quality.evaluation.authorization import ensure_profile_authorized
 from search_quality.evaluation.baseline import (
     DEFAULT_RANDOM_SEED,
@@ -59,54 +59,10 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _code_revision() -> str:
-    completed = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=PROJECT_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    revision = completed.stdout.strip()
-    dirty = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=all"],
-        cwd=PROJECT_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    if dirty:
-        raise RuntimeError(
-            "formal evaluation requires a clean Git worktree; commit or stash "
-            "changes before running"
-        )
-    return revision
-
-
 def ensure_profile_unlocked(profile_id: str) -> None:
     """Backward-compatible alias for the shared formal-run authorization gate."""
 
     ensure_profile_authorized(profile_id)
-
-
-def _atomic_write_text(path: Path, contents: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        text=True,
-    )
-    temporary_path = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(contents)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_path, path)
-    finally:
-        with contextlib.suppress(FileNotFoundError):
-            temporary_path.unlink()
 
 
 def _write_run(
@@ -118,13 +74,9 @@ def _write_run(
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     output = output_dir / f"{run['run_id']}.json"
-    serialized = json.dumps(run, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    if output.is_file() and output.read_text(encoding="utf-8") != serialized:
-        raise RuntimeError(f"immutable Run ID collision at {output}")
-    if not output.is_file():
-        _atomic_write_text(output, serialized)
+    write_immutable_json(output, run)
     latest = output_dir / f"latest-{profile_id}-{ranker_name}.txt"
-    _atomic_write_text(latest, output.name + "\n")
+    atomic_write_text(latest, output.name + "\n")
     logger.info(
         "run_manifest_stored",
         extra={
@@ -144,7 +96,7 @@ def _execute(args: argparse.Namespace) -> None:
         project_root=PROJECT_ROOT,
         manifest_path=args.manifest,
     )
-    revision = _code_revision()
+    revision = require_clean_code_revision(PROJECT_ROOT)
     ranker_names = RANKER_NAMES if args.ranker == "all" else (args.ranker,)
     for ranker_name in ranker_names:
         run = run_candidate_baseline(

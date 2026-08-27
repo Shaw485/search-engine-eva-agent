@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import time
 from typing import Any
 
@@ -52,6 +53,7 @@ _RUN_ID_PREFIXES = {
     "random": "random",
     "title-bm25": "bm25",
 }
+_GIT_REVISION_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
 logger = logging.getLogger("search_quality.evaluation")
 ranking_logger = logging.getLogger("search_quality.ranking")
 
@@ -199,8 +201,8 @@ def run_candidate_baseline(
     if not path.is_file():
         raise FileNotFoundError(path)
     code_revision = code_revision.strip()
-    if not code_revision:
-        raise ValueError("code_revision must not be empty")
+    if not _GIT_REVISION_PATTERN.fullmatch(code_revision):
+        raise ValueError("code_revision must be a full lowercase Git commit SHA")
     frame = pl.read_parquet(path).with_columns(
         pl.col("query_text").cast(pl.String).str.strip_chars(),
         pl.col("product_id").cast(pl.String).str.strip_chars(),
