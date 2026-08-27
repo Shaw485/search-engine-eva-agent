@@ -7,7 +7,13 @@ to a dataset version, run configuration, metric, and ranked product list.
 
 ## Project status
 
-**Stage 2 Search Evaluation Harness: in progress.** The Stage 1 technical data
+**Full-catalog website baseline plus Stage 2 Harness: in progress.** The Owner
+has prioritized an experience milestone: all 1,814,924 official ESCI products
+must first be searchable on the existing portfolio page, while the optimized
+lane remains closed. This product-search track uses a persistent SQLite FTS5
+index and does not unlock or weaken the relevance-evaluation test boundary.
+
+The Stage 1 technical data
 gate is complete, while its owner learning check remains pending. The repository
 now includes hand-verified nDCG, MRR and Success metrics, the versioned
 `esci-primary-v1` relevance policy, a shared label-blind Ranker Harness, and
@@ -29,6 +35,7 @@ explicit pending integration check, not an implicit fallback or a claimed pass.
 - Stage 2 smoke evidence: [docs/STAGE_2_SMOKE_REPORT.md](docs/STAGE_2_SMOKE_REPORT.md)
 - Data dictionary: [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md)
 - Backend decision: [docs/adr/001-search-backend.md](docs/adr/001-search-backend.md)
+- Full-catalog baseline decision: [docs/adr/002-full-catalog-baseline.md](docs/adr/002-full-catalog-baseline.md)
 - Required learning: [docs/LEARNING_CHECKPOINTS.md](docs/LEARNING_CHECKPOINTS.md)
 - Decision and contribution provenance: [docs/CONTRIBUTION_LOG.md](docs/CONTRIBUTION_LOG.md)
 - Logging and independent diagnostics: [docs/LOGGING.md](docs/LOGGING.md)
@@ -57,6 +64,7 @@ make data-sample
 make smoke
 make eval-baseline
 make compare-runs
+make catalog-index
 EVAL_RANKER=title-bm25 make eval-baseline
 QUERY="iphone 15 pro case" make smoke
 ```
@@ -82,6 +90,10 @@ make data-esci-validate
 make data-esci-build
 ```
 
+After the pinned source is present, `make catalog-index` builds the ignored
+full-catalog artifact at `data/index/catalog-baseline-v1.sqlite3`. The command
+requires a clean Git revision so the index identity can record the exact code.
+
 Start the Stage 0 API with:
 
 ```bash
@@ -90,6 +102,10 @@ curl http://127.0.0.1:8000/health
 curl --request POST 'http://127.0.0.1:8000/smoke' \
   --header 'Content-Type: application/json' \
   --data '{"query":"wireless mouse","top_k":3,"backend":"local"}'
+
+curl --request POST 'http://127.0.0.1:8000/catalog/search' \
+  --header 'Content-Type: application/json' \
+  --data '{"query":"wireless mouse","top_k":10}'
 ```
 
 ## What the Stage 0 vector result means
@@ -187,8 +203,8 @@ not presented as full-catalog recall.
 
 ## Next step
 
-Use the smoke comparison report to complete the Stage 1 Owner checkpoint on
-Query-level leakage and incomplete judgments and the Stage 2 metric exercise.
-Only then explicitly unlock and run the same three comparators plus
-`compare_runs` on the fixed 500-Query dev profile. Frozen test stays closed until
-a milestone release gate; the Agent MVP follows the accepted dev baseline.
+Build, benchmark and deploy the full-catalog baseline so the Owner can record
+real search failures on the website. That experience does not count as a
+relevance evaluation. In parallel, the Owner still needs to complete the Stage
+1 data-boundary and Stage 2 metric exercises before the 500-Query dev profile is
+unlocked. Frozen test stays closed until a milestone release gate.

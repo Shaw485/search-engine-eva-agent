@@ -16,6 +16,7 @@ stderr. Normal CLI results remain on stdout.
 |---|---|---|
 | `api` | HTTP request boundary and public failure correlation | `INFO` in systemd |
 | `backend` | Local/OpenSearch smoke lifecycle | `WARNING` |
+| `catalog` | Full-catalog index build, readiness and search timing | `WARNING` |
 | `data` | Stage 1 validation and build lifecycle | `WARNING` |
 | `evaluation` | Baseline/Run comparison, validation and artifact storage | `WARNING` |
 | `ranking` | Per-Query Ranker diagnostics | `OFF` |
@@ -33,6 +34,7 @@ export SEARCH_LOG_FORMAT=json
 export SEARCH_LOG_LEVEL=WARNING
 export SEARCH_LOG_LEVEL_EVALUATION=INFO
 export SEARCH_LOG_LEVEL_RANKING=DEBUG
+export SEARCH_LOG_LEVEL_CATALOG=INFO
 ```
 
 CLI entry points also accept repeatable module overrides. These examples keep
@@ -56,6 +58,9 @@ JSON diagnostics separate from the normal result:
 .venv/bin/python -m search_quality.smoke \
   --backend local --log-module backend=INFO \
   2>backend-smoke.jsonl
+
+.venv/bin/python -m search_quality.catalog.cli \
+  --log-module catalog=DEBUG 2>catalog-build.jsonl
 ```
 
 To isolate one subsystem, set the global level to `OFF` and enable only that
@@ -89,6 +94,14 @@ Markdown and latest pointer were all persisted.
 Per-Query debug events use numeric Query IDs and counts. They do not include raw
 Query text, product titles, descriptions, vectors, request bodies or result
 payloads.
+
+The full-catalog builder emits command/build start, per-batch debug progress,
+completion and failure events. Search emits index readiness plus request start
+and completion. Safe fields include index ID, expected/processed/result counts,
+token count, top K, duration and artifact size. These events do not contain the
+source/index path, raw Query, product IDs, titles, brands, colors or response
+body. `catalog_index_build_completed` means the artifact was verified, fsynced
+and atomically installed at the operator-selected output path.
 
 Comparison JSON and Markdown are evidence artifacts, not sanitized logs. They
 intentionally contain raw Query text, product IDs, labels, scores and full
@@ -152,8 +165,12 @@ systemd-analyze cat-config systemd/journald.conf
    remains an explicitly separate optional integration.
 5. `api`: reproduce the request and filter journald using the response
    `X-Request-ID` or error `trace_id`.
+6. `catalog`: run the builder with only `catalog=DEBUG`, or reproduce a POST
+   search and correlate the `catalog_search_completed` event using the API
+   trace ID. Health status distinguishes a ready index from a missing/corrupt
+   one without exposing its filesystem path.
 
-`tests/test_observability.py` verifies JSON structure, module isolation,
+`tests/test_observability.py` and `tests/test_catalog_search.py` verify JSON structure, module isolation,
 redaction variants, error classification, stable events, low-noise defaults and
 handler de-duplication. Comparison CLI tests verify success correlation, real
 validation and storage failures, failure stages, and that all Query/product

@@ -4,6 +4,8 @@ import asyncio
 import io
 import json
 import logging
+import sqlite3
+from types import SimpleNamespace
 
 import anyio
 import pytest
@@ -17,6 +19,130 @@ from search_quality.observability import (
     current_trace_id,
     logging_context,
 )
+
+
+class _FakeCatalogResult:
+    def to_dict(self) -> dict:
+        return {
+            "backend": "sqlite-fts5",
+            "hits": [],
+            "index_id": "catalog-baseline-v1-0123456789ab",
+            "locale_counts": {"us": 1},
+            "product_count": 1,
+        }
+
+
+class _FakeCatalogService:
+    metadata = SimpleNamespace(
+        index_id="catalog-baseline-v1-0123456789ab",
+        product_count=1,
+    )
+
+    def search(self, query: str, *, top_k: int):
+        assert query == "private wireless mouse"
+        assert top_k == 10
+        return _FakeCatalogResult()
+
+
+def test_catalog_search_returns_full_catalog_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api, "get_catalog_search_service", _FakeCatalogService)
+
+    response = api.catalog_search_post(
+        api.CatalogSearchRequest(query="private wireless mouse", top_k=10)
+    )
+
+    assert response == _FakeCatalogResult().to_dict()
+
+
+def test_catalog_search_failure_is_safe_and_does_not_log_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream = io.StringIO()
+    configure_logging(
+        default_level="WARNING",
+        module_levels={"api": "INFO"},
+        stream=stream,
+    )
+
+    class FailingCatalogService:
+        def search(self, _query: str, *, top_k: int):
+            assert top_k == 10
+            raise sqlite3.DatabaseError("private query and index path")
+
+    monkeypatch.setattr(
+        api,
+        "get_catalog_search_service",
+        lambda: FailingCatalogService(),
+    )
+    with logging_context(trace_id="catalog-safe-1"):
+        with pytest.raises(HTTPException) as captured:
+            api.catalog_search_post(
+                api.CatalogSearchRequest(query="private query", top_k=10)
+            )
+
+    assert captured.value.status_code == 503
+    assert captured.value.detail == {
+        "code": "catalog_search_unavailable",
+        "message": "Catalog search unavailable",
+        "trace_id": "catalog-safe-1",
+    }
+    assert "private query" not in stream.getvalue()
+    assert "index path" not in stream.getvalue()
+    event = json.loads(stream.getvalue())
+    assert event["event"] == "catalog_search_failed"
+    assert event["error_type"] == "DatabaseError"
+
+
+def test_invalid_catalog_query_returns_safe_client_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RejectingCatalogService:
+        def search(self, _query: str, *, top_k: int):
+            raise api.InvalidCatalogQuery("private invalid input")
+
+    monkeypatch.setattr(
+        api,
+        "get_catalog_search_service",
+        lambda: RejectingCatalogService(),
+    )
+    with logging_context(trace_id="catalog-safe-2"):
+        with pytest.raises(HTTPException) as captured:
+            api.catalog_search_post(api.CatalogSearchRequest(query="___", top_k=10))
+
+    assert captured.value.status_code == 400
+    assert captured.value.detail == {
+        "code": "invalid_catalog_query",
+        "message": "Search query is invalid",
+        "trace_id": "catalog-safe-2",
+    }
+    assert "private invalid input" not in json.dumps(captured.value.detail)
+
+
+def test_catalog_health_distinguishes_ready_and_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api, "get_catalog_search_service", _FakeCatalogService)
+    assert api.health() == {
+        "catalog": {
+            "index_id": "catalog-baseline-v1-0123456789ab",
+            "product_count": 1,
+            "status": "ready",
+        },
+        "stage": "catalog-baseline",
+        "status": "ok",
+    }
+
+    def unavailable():
+        raise FileNotFoundError("private index path")
+
+    monkeypatch.setattr(api, "get_catalog_search_service", unavailable)
+    assert api.health() == {
+        "catalog": {"status": "unavailable"},
+        "stage": "catalog-baseline",
+        "status": "ok",
+    }
 
 
 def test_public_smoke_failure_is_correlated_without_leaking_cause(

@@ -26,8 +26,16 @@ def test_local_smoke_contract() -> None:
     assert len(result["vector"]) == 3
 
 
-def test_api_health_and_smoke() -> None:
-    assert health() == {"status": "ok", "stage": "0"}
+def test_api_health_and_smoke(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unavailable():
+        raise FileNotFoundError("catalog fixture intentionally absent")
+
+    monkeypatch.setattr("apps.api.main.get_catalog_search_service", unavailable)
+    assert health() == {
+        "catalog": {"status": "unavailable"},
+        "stage": "catalog-baseline",
+        "status": "ok",
+    }
     assert (
         smoke(query="wireless mouse", top_k=2, backend="local")["deterministic"] is True
     )

@@ -1,7 +1,8 @@
-# Stage 0 portfolio deployment
+# Full-catalog portfolio deployment
 
-This deployment exposes only the deterministic ten-product Stage 0 experience.
-It does not deploy OpenSearch or claim formal ESCI evaluation quality.
+This deployment serves the baseline search over all 1,814,924 official ESCI
+products. It does not claim Amazon production parity or full-catalog relevance
+quality; the optimized website lane remains closed.
 
 ## Topology
 
@@ -9,19 +10,42 @@ It does not deploy OpenSearch or claim formal ESCI evaluation quality.
 shawspace.cn/search-eval.html
           |
           v
-Nginx /search-eval-api/*
+Nginx /search-eval-api/* (same HTTPS origin, access log off)
           |
           v
-Uvicorn 127.0.0.1:8010
+Uvicorn 127.0.0.1:8010 (www-data)
           |
           v
-Local BM25 + deterministic-hash-v1 over data/samples/products.json
+/var/lib/search-engine-eva-agent/catalog-baseline-v1.sqlite3
 ```
 
-The API binds to loopback only. Nginx is the only public entry point, so the
-portfolio page and API share the same HTTPS origin.
+The source Parquet and built index are not stored in Git. Build the verified
+index on a trusted machine with enough disk, transfer that single artifact to a
+temporary server path, verify its SHA-256, and install it read-only for the
+service. The API refuses missing or incompatible metadata.
 
-## First install
+## Build the artifact
+
+The repository must be clean because its full commit SHA enters the index
+identity:
+
+```bash
+make data-download
+make data-esci-validate
+make catalog-index
+ls -lh data/index/catalog-baseline-v1.sqlite3
+shasum -a 256 data/index/catalog-baseline-v1.sqlite3
+```
+
+Record the printed index ID, product count, locale counts, file size and hash.
+The build logs can be isolated with:
+
+```bash
+SEARCH_LOG_LEVEL=OFF SEARCH_LOG_LEVEL_CATALOG=INFO \
+  make catalog-index 2>catalog-build.jsonl
+```
+
+## First application install
 
 Run these commands on the server after reviewing the paths:
 
@@ -30,18 +54,32 @@ sudo git clone https://github.com/Shaw485/search-engine-eva-agent.git /var/www/s
 sudo python3 -m venv /var/www/search-engine-eva-agent/.venv
 sudo /var/www/search-engine-eva-agent/.venv/bin/pip install -r /var/www/search-engine-eva-agent/requirements-dev.lock
 sudo /var/www/search-engine-eva-agent/.venv/bin/pip install --no-build-isolation --no-deps -e /var/www/search-engine-eva-agent
+sudo install -d -o root -g www-data -m 0750 /var/lib/search-engine-eva-agent
 sudo cp /var/www/search-engine-eva-agent/deploy/search-engine-eva-agent.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now search-engine-eva-agent
 ```
 
 Add `deploy/nginx-search-eval.conf` inside the existing HTTPS server block, then
-validate and reload Nginx:
+run `sudo nginx -t` before `sudo systemctl reload nginx`.
+
+## Install or replace the index
+
+Transfer the artifact to a new, explicit temporary file on the server. Compare
+its SHA-256 with the recorded local value before installation. Then:
 
 ```bash
-sudo nginx -t
-sudo systemctl reload nginx
+sudo install -o root -g www-data -m 0640 \
+  /tmp/catalog-baseline-v1.sqlite3.upload \
+  /var/lib/search-engine-eva-agent/catalog-baseline-v1.sqlite3.new
+sudo mv /var/lib/search-engine-eva-agent/catalog-baseline-v1.sqlite3.new \
+  /var/lib/search-engine-eva-agent/catalog-baseline-v1.sqlite3
+sudo systemctl enable --now search-engine-eva-agent
 ```
+
+The fixed target path is deliberate; the source path and expected hash must be
+resolved before these replacement commands are run. The old artifact is
+replaced atomically on the same filesystem. Keep the local verified artifact so
+the previous index can be reinstalled if verification fails.
 
 ## Update and verify
 
@@ -50,26 +88,27 @@ sudo git -C /var/www/search-engine-eva-agent pull --ff-only
 sudo /var/www/search-engine-eva-agent/.venv/bin/pip install --no-build-isolation --no-deps -e /var/www/search-engine-eva-agent
 sudo systemctl restart search-engine-eva-agent
 curl http://127.0.0.1:8010/health
-curl --request POST 'https://shawspace.cn/search-eval-api/smoke' \
+curl --request POST 'https://shawspace.cn/search-eval-api/catalog/search' \
   --header 'Content-Type: application/json' \
-  --data '{"query":"wireless mouse","top_k":3,"backend":"local"}'
+  --data '{"query":"wireless mouse","top_k":3}'
 ```
 
-Before a reload, `nginx -t` must pass. After an update, verify both the loopback
-health endpoint and the public same-origin smoke endpoint.
+Acceptance requires:
 
-Each response produced by the application includes `X-Request-ID`; public
-backend failures also include the same value as `trace_id`. Use it to find the
-safe structured request event:
+1. Health reports `catalog.status=ready`, the expected index ID and 1,814,924 products.
+2. English, Spanish, Japanese and exact product-ID checks return valid JSON.
+3. The website renders full-catalog results in the left lane.
+4. The optimized lane is still visibly unsupported.
+5. A failed Query can be correlated by `X-Request-ID` without Query text in logs.
+
+Use a response request ID to inspect safe diagnostics:
 
 ```bash
 sudo journalctl -u search-engine-eva-agent --since '15 minutes ago' -o cat \
   | jq -R 'fromjson? | select(.trace_id == "TRACE_ID")'
 ```
 
-Uvicorn and this Nginx location intentionally disable default access logs. The
-documented client uses POST so Query text stays out of the URL, browser history
-and proxy error request lines. A deprecated GET endpoint remains only for the
-current prototype UI and must not be used for sensitive searches. The API emits
-only an allowlisted route, status, duration and trace ID. Module controls,
-redaction and journald retention are documented in [LOGGING.md](LOGGING.md).
+Uvicorn and the Nginx location disable request-line access logs. Public search
+uses POST so Query text stays out of the URL, browser history and proxy request
+lines. Module controls, redaction and journald retention are documented in
+[LOGGING.md](LOGGING.md).

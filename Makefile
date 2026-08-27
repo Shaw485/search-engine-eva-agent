@@ -8,7 +8,7 @@ EVAL_RANKER ?= all
 
 .PHONY: help setup format lint policy check test smoke data-sample data-download \
 	data-esci-validate data-esci-build api opensearch-up opensearch-down \
-	smoke-opensearch eval-baseline compare-runs web clean
+	smoke-opensearch eval-baseline compare-runs catalog-index web clean
 
 help:
 	@echo "setup             Create the virtual environment and install dependencies"
@@ -22,6 +22,7 @@ help:
 	@echo "data-download     Download and verify the pinned Amazon ESCI sources"
 	@echo "data-esci-validate Verify source sizes, hashes, magic and schemas"
 	@echo "data-esci-build   Build deterministic Stage 1 train/dev/test assets"
+	@echo "catalog-index     Build the 1,814,924-product SQLite FTS5 index"
 	@echo "api               Start the local FastAPI service"
 	@echo "opensearch-up     Start the optional local OpenSearch service"
 	@echo "smoke-opensearch  Run the same smoke contract against OpenSearch"
@@ -65,6 +66,9 @@ data-esci-validate:
 
 data-esci-build:
 	$(VENV_PYTHON) -m search_quality.data.cli
+
+catalog-index:
+	$(VENV_PYTHON) -m search_quality.catalog.cli
 
 api:
 	$(VENV_PYTHON) -m uvicorn apps.api.main:app --host 127.0.0.1 --port 8000 --no-access-log

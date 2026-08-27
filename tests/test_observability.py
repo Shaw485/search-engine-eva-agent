@@ -7,6 +7,7 @@ import sys
 
 import pytest
 
+from search_quality.catalog import cli as catalog_cli
 from search_quality.data import cli as data_cli
 from search_quality.evaluation import cli as evaluation_cli
 from search_quality.evaluation import compare_cli
@@ -183,7 +184,9 @@ def test_trace_id_accepts_safe_values_and_replaces_unsafe_values() -> None:
     assert generated != "bad value with spaces"
 
 
-@pytest.mark.parametrize("cli_module", [data_cli, evaluation_cli, compare_cli])
+@pytest.mark.parametrize(
+    "cli_module", [catalog_cli, data_cli, evaluation_cli, compare_cli]
+)
 def test_cli_failure_boundary_never_logs_exception_message(
     cli_module, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

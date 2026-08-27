@@ -1,5 +1,5 @@
 [Unit]
-Description=Search Engine EVA Agent Stage 0 API
+Description=Search Engine EVA Agent catalog API
 After=network.target
 
 [Service]
@@ -9,10 +9,12 @@ Group=www-data
 WorkingDirectory=/var/www/search-engine-eva-agent
 Environment=PYTHONUNBUFFERED=1
 Environment=SEARCH_BACKEND=local
+Environment=SEARCH_CATALOG_INDEX=/var/lib/search-engine-eva-agent/catalog-baseline-v1.sqlite3
 Environment=SEARCH_LOG_FORMAT=json
 Environment=SEARCH_LOG_LEVEL=WARNING
 Environment=SEARCH_LOG_LEVEL_API=INFO
 Environment=SEARCH_LOG_LEVEL_BACKEND=WARNING
+Environment=SEARCH_LOG_LEVEL_CATALOG=WARNING
 Environment=SEARCH_LOG_LEVEL_RANKING=OFF
 ExecStart=/var/www/search-engine-eva-agent/.venv/bin/python -m uvicorn apps.api.main:app --host 127.0.0.1 --port 8010 --no-access-log
 StandardOutput=journal

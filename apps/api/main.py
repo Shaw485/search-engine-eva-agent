@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import time
+from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -12,6 +15,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse
 
+from search_quality.catalog import (
+    DEFAULT_CATALOG_INDEX,
+    CatalogSearchService,
+    InvalidCatalogQuery,
+)
 from search_quality.observability import (
     classify_error,
     configure_logging,
@@ -26,8 +34,8 @@ logger = logging.getLogger("search_quality.api")
 
 app = FastAPI(
     title="Search Engine EVA Agent",
-    version="0.1.0",
-    description="Stage 0 search backend smoke service",
+    version="0.2.0",
+    description="Full-catalog baseline search and evaluation service",
 )
 
 # The production portfolio uses a same-origin Nginx proxy. These two origins are
@@ -55,9 +63,11 @@ async def request_diagnostics(request: Request, call_next):
             if request.method in {"GET", "HEAD", "OPTIONS", "POST"}
             else "OTHER"
         ),
-        "route": request.url.path
-        if request.url.path in {"/health", "/smoke"}
-        else "unmatched",
+        "route": (
+            request.url.path
+            if request.url.path in {"/catalog/search", "/health", "/smoke"}
+            else "unmatched"
+        ),
         "trace_id": trace_id,
     }
     with logging_context(**safe_context):
@@ -96,9 +106,35 @@ async def request_diagnostics(request: Request, call_next):
         return response
 
 
+def _catalog_index_path() -> Path:
+    configured = os.environ.get("SEARCH_CATALOG_INDEX")
+    if configured:
+        return Path(configured)
+    return Path(__file__).resolve().parents[2] / DEFAULT_CATALOG_INDEX
+
+
+@lru_cache(maxsize=4)
+def _cached_catalog_service(index_path: str) -> CatalogSearchService:
+    return CatalogSearchService(index_path)
+
+
+def get_catalog_search_service() -> CatalogSearchService:
+    return _cached_catalog_service(str(_catalog_index_path()))
+
+
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "stage": "0"}
+def health() -> dict:
+    try:
+        metadata = get_catalog_search_service().metadata
+    except (OSError, RuntimeError, ValueError, sqlite3.Error):
+        catalog = {"status": "unavailable"}
+    else:
+        catalog = {
+            "index_id": metadata.index_id,
+            "product_count": metadata.product_count,
+            "status": "ready",
+        }
+    return {"catalog": catalog, "stage": "catalog-baseline", "status": "ok"}
 
 
 class SmokeRequest(BaseModel):
@@ -107,6 +143,13 @@ class SmokeRequest(BaseModel):
     query: str = Field(default="wireless mouse", min_length=1, max_length=200)
     top_k: int = Field(default=5, ge=1, le=10)
     backend: Literal["local", "opensearch"] = "local"
+
+
+class CatalogSearchRequest(BaseModel):
+    """Full-catalog request kept in the HTTPS body rather than the URL."""
+
+    query: str = Field(min_length=1, max_length=200)
+    top_k: int = Field(default=10, ge=1, le=20)
 
 
 @app.get("/smoke", deprecated=True)
@@ -146,3 +189,48 @@ def smoke_post(request: SmokeRequest) -> dict:
     """Preferred public transport: Query text stays in the request body."""
 
     return smoke(query=request.query, top_k=request.top_k, backend=request.backend)
+
+
+@app.post("/catalog/search")
+def catalog_search_post(request: CatalogSearchRequest) -> dict:
+    """Search all 1,814,924 official ESCI products through the baseline index."""
+
+    try:
+        return (
+            get_catalog_search_service()
+            .search(
+                request.query,
+                top_k=request.top_k,
+            )
+            .to_dict()
+        )
+    except InvalidCatalogQuery as exc:
+        logger.debug(
+            "catalog_query_rejected",
+            extra={"error_code": "invalid_catalog_query"},
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_catalog_query",
+                "message": "Search query is invalid",
+                "trace_id": current_trace_id(),
+            },
+        ) from exc
+    except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
+        trace_id = current_trace_id()
+        logger.error(
+            "catalog_search_failed",
+            extra={
+                "error_code": classify_error(exc),
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "catalog_search_unavailable",
+                "message": "Catalog search unavailable",
+                "trace_id": trace_id,
+            },
+        ) from exc
