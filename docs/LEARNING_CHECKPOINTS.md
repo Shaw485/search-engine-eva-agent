@@ -58,3 +58,7 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
   不能证明模型能泛化到新 Query？另外，为什么 ESCI 中未标注的商品不能
   自动当成 Irrelevant，也不能据此宣称全 Amazon 商品库 Recall？
 - 状态：**Awaiting owner answer**
+
+执行保护：当前 Stage 2 共享正式评测入口与 CLI 都只允许 smoke。Owner 用
+自己的话完成上述回答并记录证据后，才通过代码变更解锁 500-Query dev；
+“继续执行”不视为知识验证。

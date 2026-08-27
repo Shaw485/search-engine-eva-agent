@@ -1,14 +1,17 @@
-"""Run the deterministic title-BM25 candidate-reranking baseline."""
+"""Run deterministic candidate-reranking baselines through one Harness."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
+import time
 from typing import Any
 
 import polars as pl
 
+from search_quality.evaluation.authorization import ensure_profile_authorized
 from search_quality.evaluation.datasets import EvaluationProfile, sha256_file
 from search_quality.evaluation.metrics import (
     mean_ndcg_at_k,
@@ -20,9 +23,13 @@ from search_quality.evaluation.metrics import (
 )
 from search_quality.evaluation.relevance import ESCI_LABEL_SET, RelevancePolicy
 from search_quality.ranking import (
+    CandidateDeterministicRandomRanker,
+    CandidateKeywordOverlapRanker,
     CandidateProduct,
+    CandidateRanker,
     CandidateTitleBM25Ranker,
     ProductKey,
+    RankedProduct,
 )
 
 REQUIRED_COLUMNS = {
@@ -38,6 +45,15 @@ REQUIRED_COLUMNS = {
     "is_smoke",
 }
 RUN_SCHEMA_VERSION = "search-evaluation-run-v1"
+DEFAULT_RANDOM_SEED = 17
+RANKER_NAMES = ("random", "keyword-overlap", "title-bm25")
+_RUN_ID_PREFIXES = {
+    "keyword-overlap": "overlap",
+    "random": "random",
+    "title-bm25": "bm25",
+}
+logger = logging.getLogger("search_quality.evaluation")
+ranking_logger = logging.getLogger("search_quality.ranking")
 
 
 def _validate_frame(frame: pl.DataFrame) -> None:
@@ -129,8 +145,9 @@ def _validate_frame(frame: pl.DataFrame) -> None:
 
 
 def _validate_ranking(
-    candidate_keys: list[ProductKey], ranked_keys: list[ProductKey]
+    candidate_keys: list[ProductKey], ranked: list[RankedProduct]
 ) -> None:
+    ranked_keys = [result.key for result in ranked]
     if len(ranked_keys) != len(set(ranked_keys)):
         raise ValueError("ranker returned duplicate product keys")
     if set(ranked_keys) != set(candidate_keys):
@@ -140,16 +157,44 @@ def _validate_ranking(
             f"ranker output does not match candidates; missing={missing[:3]}, "
             f"unknown={unknown[:3]}"
         )
+    if [result.rank for result in ranked] != list(range(1, len(ranked) + 1)):
+        raise ValueError("ranker returned non-contiguous ranks")
+    if any(not math.isfinite(result.score) for result in ranked):
+        raise ValueError("ranker returned a non-finite score")
 
 
-def run_candidate_title_bm25_baseline(
+def _build_ranker(
+    ranker_name: str,
+    products: list[CandidateProduct],
+    *,
+    random_seed: int,
+) -> CandidateRanker:
+    if ranker_name == "random":
+        return CandidateDeterministicRandomRanker(products, seed=random_seed)
+    if ranker_name == "keyword-overlap":
+        return CandidateKeywordOverlapRanker(products)
+    if ranker_name == "title-bm25":
+        return CandidateTitleBM25Ranker(products)
+    raise ValueError(
+        f"unsupported ranker {ranker_name!r}; expected one of {RANKER_NAMES}"
+    )
+
+
+def run_candidate_baseline(
     profile: EvaluationProfile,
     *,
     policy: RelevancePolicy,
     code_revision: str,
+    ranker_name: str,
+    random_seed: int = DEFAULT_RANDOM_SEED,
 ) -> dict[str, Any]:
-    """Evaluate title BM25 on every judged candidate set in a Parquet profile."""
+    """Evaluate one label-blind Ranker on every judged candidate set."""
 
+    ensure_profile_authorized(profile.profile_id)
+    if ranker_name not in RANKER_NAMES:
+        raise ValueError(
+            f"unsupported ranker {ranker_name!r}; expected one of {RANKER_NAMES}"
+        )
     path = profile.path
     if not path.is_file():
         raise FileNotFoundError(path)
@@ -188,6 +233,16 @@ def run_candidate_title_bm25_baseline(
             "evaluation profile counts do not match Stage 1 manifest; "
             f"observed={observed_counts}, expected={expected_counts}"
         )
+    started = time.perf_counter()
+    logger.info(
+        "baseline_started",
+        extra={
+            "judgment_count": frame.height,
+            "profile_id": profile.profile_id,
+            "query_count": queries,
+            "ranker_name": ranker_name,
+        },
+    )
 
     ranked_gains_by_query: list[list[float]] = []
     candidate_gains_by_query: list[list[float]] = []
@@ -217,10 +272,16 @@ def run_candidate_title_bm25_baseline(
                 "product_locale", "product_id", "product_title"
             ).iter_rows(named=True)
         ]
-        ranker = CandidateTitleBM25Ranker(candidate_products)
+        query_started = time.perf_counter()
+        ranker = _build_ranker(
+            ranker_name,
+            candidate_products,
+            random_seed=random_seed,
+        )
+        observed_ranker_config = dict(ranker.config)
         if ranker_config is None:
-            ranker_config = ranker.config
-        elif ranker_config != ranker.config:
+            ranker_config = observed_ranker_config
+        elif ranker_config != observed_ranker_config:
             raise ValueError("ranker configuration changed inside one run")
         labels_by_product = dict(
             (
@@ -241,8 +302,18 @@ def run_candidate_title_bm25_baseline(
             ).iter_rows(named=True)
         )
         ranked = ranker.rank(query_text)
+        _validate_ranking(candidate_keys, ranked)
         ranked_keys = [result.key for result in ranked]
-        _validate_ranking(candidate_keys, ranked_keys)
+        ranking_logger.debug(
+            "query_ranked",
+            extra={
+                "candidate_count": len(candidate_keys),
+                "duration_ms": round((time.perf_counter() - query_started) * 1000, 3),
+                "profile_id": profile.profile_id,
+                "query_id": query_id,
+                "ranker_id": observed_ranker_config["ranker_id"],
+            },
+        )
 
         ranked_labels = [labels_by_product[key] for key in ranked_keys]
         ranked_gains = [policy.gain(label) for label in ranked_labels]
@@ -307,6 +378,9 @@ def run_candidate_title_bm25_baseline(
     ):
         raise ValueError("baseline produced invalid aggregate metrics")
 
+    if ranker_config is None:
+        raise RuntimeError("baseline did not evaluate any queries")
+
     payload: dict[str, Any] = {
         "code_revision": code_revision,
         "dataset": {
@@ -334,5 +408,64 @@ def run_candidate_title_bm25_baseline(
     canonical = json.dumps(
         payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True
     ).encode("utf-8")
-    payload["run_id"] = f"bm25-{hashlib.sha256(canonical).hexdigest()[:12]}"
+    payload["run_id"] = (
+        f"{_RUN_ID_PREFIXES[ranker_name]}-{hashlib.sha256(canonical).hexdigest()[:12]}"
+    )
+    logger.info(
+        "baseline_completed",
+        extra={
+            "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+            "metrics": metrics,
+            "profile_id": profile.profile_id,
+            "query_count": len(per_query),
+            "ranker_id": ranker_config["ranker_id"],
+            "run_id": payload["run_id"],
+        },
+    )
     return payload
+
+
+def run_candidate_title_bm25_baseline(
+    profile: EvaluationProfile,
+    *,
+    policy: RelevancePolicy,
+    code_revision: str,
+) -> dict[str, Any]:
+    """Backward-compatible title-BM25 baseline wrapper."""
+
+    return run_candidate_baseline(
+        profile,
+        policy=policy,
+        code_revision=code_revision,
+        ranker_name="title-bm25",
+    )
+
+
+def run_candidate_keyword_overlap_baseline(
+    profile: EvaluationProfile,
+    *,
+    policy: RelevancePolicy,
+    code_revision: str,
+) -> dict[str, Any]:
+    return run_candidate_baseline(
+        profile,
+        policy=policy,
+        code_revision=code_revision,
+        ranker_name="keyword-overlap",
+    )
+
+
+def run_candidate_random_baseline(
+    profile: EvaluationProfile,
+    *,
+    policy: RelevancePolicy,
+    code_revision: str,
+    seed: int = DEFAULT_RANDOM_SEED,
+) -> dict[str, Any]:
+    return run_candidate_baseline(
+        profile,
+        policy=policy,
+        code_revision=code_revision,
+        ranker_name="random",
+        random_seed=seed,
+    )

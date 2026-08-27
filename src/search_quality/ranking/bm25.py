@@ -2,45 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass
 
+from search_quality.ranking.base import (
+    CandidateProduct,
+    ProductKey,
+    RankedProduct,
+    validate_candidate_products,
+)
 from search_quality.text import tokenize
 
-ProductKey = tuple[str, str]
-
-
-@dataclass(frozen=True, slots=True)
-class CandidateProduct:
-    locale: str
-    product_id: str
-    title: str
-
-    def __post_init__(self) -> None:
-        if not self.locale.strip():
-            raise ValueError("locale must not be empty")
-        if not self.product_id.strip():
-            raise ValueError("product_id must not be empty")
-        if not self.title.strip():
-            raise ValueError("title must not be empty")
-
-    @property
-    def key(self) -> ProductKey:
-        return (self.locale, self.product_id)
-
-
-@dataclass(frozen=True, slots=True)
-class RankedProduct:
-    locale: str
-    product_id: str
-    score: float
-    rank: int
-
-    @property
-    def key(self) -> ProductKey:
-        return (self.locale, self.product_id)
+_LOGGER = logging.getLogger(__name__)
 
 
 class CandidateTitleBM25Ranker:
@@ -56,21 +31,17 @@ class CandidateTitleBM25Ranker:
         k1: float = 1.5,
         b: float = 0.75,
     ) -> None:
-        if not products:
-            raise ValueError("products must not be empty")
         if not math.isfinite(k1) or k1 <= 0.0:
             raise ValueError("k1 must be finite and greater than 0")
         if not math.isfinite(b) or not 0.0 <= b <= 1.0:
             raise ValueError("b must be finite and between 0 and 1")
 
-        product_keys = [product.key for product in products]
-        if len(product_keys) != len(set(product_keys)):
-            raise ValueError("product keys must be unique")
+        candidates = validate_candidate_products(products)
 
         self.k1 = k1
         self.b = b
-        self._products = {product.key: product for product in products}
-        token_lists = {product.key: tokenize(product.title) for product in products}
+        self._products = {product.key: product for product in candidates}
+        token_lists = {product.key: tokenize(product.title) for product in candidates}
         self._term_counts = {
             product_id: Counter(tokens) for product_id, tokens in token_lists.items()
         }
@@ -80,7 +51,7 @@ class CandidateTitleBM25Ranker:
         self._document_frequency = Counter(
             token for tokens in token_lists.values() for token in set(tokens)
         )
-        self._corpus_size = len(products)
+        self._corpus_size = len(candidates)
         self._average_length = max(
             sum(self._document_lengths.values()) / self._corpus_size, 1.0
         )
@@ -100,6 +71,10 @@ class CandidateTitleBM25Ranker:
 
     def rank(self, query: str) -> list[RankedProduct]:
         if not query.strip():
+            _LOGGER.debug(
+                "rank_request_rejected",
+                extra={"reason": "empty_query", "ranker_id": self.ranker_id},
+            )
             raise ValueError("query must not be empty")
 
         query_terms = tuple(dict.fromkeys(tokenize(query)))

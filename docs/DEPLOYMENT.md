@@ -50,8 +50,26 @@ sudo git -C /var/www/search-engine-eva-agent pull --ff-only
 sudo /var/www/search-engine-eva-agent/.venv/bin/pip install --no-build-isolation --no-deps -e /var/www/search-engine-eva-agent
 sudo systemctl restart search-engine-eva-agent
 curl http://127.0.0.1:8010/health
-curl 'https://shawspace.cn/search-eval-api/smoke?query=wireless%20mouse&top_k=3&backend=local'
+curl --request POST 'https://shawspace.cn/search-eval-api/smoke' \
+  --header 'Content-Type: application/json' \
+  --data '{"query":"wireless mouse","top_k":3,"backend":"local"}'
 ```
 
 Before a reload, `nginx -t` must pass. After an update, verify both the loopback
 health endpoint and the public same-origin smoke endpoint.
+
+Each response produced by the application includes `X-Request-ID`; public
+backend failures also include the same value as `trace_id`. Use it to find the
+safe structured request event:
+
+```bash
+sudo journalctl -u search-engine-eva-agent --since '15 minutes ago' -o cat \
+  | jq -R 'fromjson? | select(.trace_id == "TRACE_ID")'
+```
+
+Uvicorn and this Nginx location intentionally disable default access logs. The
+documented client uses POST so Query text stays out of the URL, browser history
+and proxy error request lines. A deprecated GET endpoint remains only for the
+current prototype UI and must not be used for sensitive searches. The API emits
+only an allowlisted route, status, duration and trace ID. Module controls,
+redaction and journald retention are documented in [LOGGING.md](LOGGING.md).

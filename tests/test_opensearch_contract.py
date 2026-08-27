@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
 
 import pytest
 
 from search_quality.backends.opensearch import OpenSearchBackend, OpenSearchError
 from search_quality.models import Product, ProductDocument
+from search_quality.observability import configure_logging, logging_context
 
 ROOT = Path(__file__).parents[1]
 CONFIG = ROOT / "configs" / "opensearch" / "products-index.json"
@@ -108,6 +111,15 @@ def test_opensearch_adapter_rejects_remote_hosts() -> None:
     with pytest.raises(ValueError, match="localhost"):
         OpenSearchBackend(
             base_url="https://search.example.com",
+            index_name="search-quality-smoke",
+            index_config_path=CONFIG,
+        )
+
+
+def test_opensearch_adapter_rejects_credentials_embedded_in_url() -> None:
+    with pytest.raises(ValueError, match="dedicated environment fields"):
+        OpenSearchBackend(
+            base_url="http://user:password@localhost:9200",
             index_name="search-quality-smoke",
             index_config_path=CONFIG,
         )
@@ -229,6 +241,91 @@ def test_opensearch_json_requests_reject_nan_before_network() -> None:
             payload={"value": float("nan")},
             expected_statuses={200},
         )
+
+
+def test_opensearch_http_errors_do_not_expose_response_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream = io.StringIO()
+    configure_logging(
+        default_level="WARNING",
+        module_levels={"backend": "DEBUG"},
+        stream=stream,
+    )
+    backend = OpenSearchBackend(
+        base_url="http://127.0.0.1:9200",
+        index_name="search-quality-unused",
+        index_config_path=CONFIG,
+    )
+
+    def fail_request(*_args, **_kwargs):
+        raise HTTPError(
+            url="http://127.0.0.1:9200/_search",
+            code=500,
+            msg="server error",
+            hdrs={},
+            fp=io.BytesIO(b"sensitive backend response body"),
+        )
+
+    monkeypatch.setattr("search_quality.backends.opensearch.urlopen", fail_request)
+    with logging_context(trace_id="opensearch-safe-trace"):
+        with pytest.raises(OpenSearchError) as captured:
+            backend._request_json("GET", "/_search", expected_statuses={200})
+
+    assert "status 500" in str(captured.value)
+    assert "sensitive backend response body" not in str(captured.value)
+    assert "sensitive backend response body" not in stream.getvalue()
+    events = [json.loads(line) for line in stream.getvalue().splitlines()]
+    failure = [
+        event for event in events if event["event"] == "opensearch_request_failed"
+    ]
+    assert len(failure) == 1
+    assert failure[0]["backend_operation"] == "search"
+    assert failure[0]["error_code"] == "opensearch_http_error"
+    assert failure[0]["status_code"] == 500
+    assert failure[0]["trace_id"] == "opensearch-safe-trace"
+
+
+def test_readiness_polling_emits_one_low_noise_terminal_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream = io.StringIO()
+    configure_logging(
+        default_level="WARNING",
+        module_levels={"backend": "WARNING"},
+        stream=stream,
+    )
+    backend = OpenSearchBackend(
+        base_url="http://127.0.0.1:9200",
+        index_name="search-quality-unused",
+        index_config_path=CONFIG,
+        readiness_timeout_seconds=1.0,
+    )
+    monotonic_values = iter([0.0, 0.0, 0.5, 1.0])
+
+    monkeypatch.setattr(
+        "search_quality.backends.opensearch.time.monotonic",
+        lambda: next(monotonic_values),
+    )
+    monkeypatch.setattr(
+        "search_quality.backends.opensearch.time.sleep", lambda _s: None
+    )
+    monkeypatch.setattr(
+        "search_quality.backends.opensearch.urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            URLError("private readiness cause")
+        ),
+    )
+
+    with pytest.raises(OSError, match="did not become ready"):
+        backend.wait_until_ready()
+
+    events = [json.loads(line) for line in stream.getvalue().splitlines()]
+    assert [event["event"] for event in events] == ["opensearch_readiness_failed"]
+    assert events[0]["attempt_count"] == 2
+    assert events[0]["error_code"] == "opensearch_readiness_timeout"
+    assert events[0]["last_error_type"] == "OSError"
+    assert "private readiness cause" not in stream.getvalue()
 
 
 def test_opensearch_adapter_rejects_k_above_engine_limit() -> None:

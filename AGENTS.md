@@ -45,3 +45,30 @@ Codex unless there is direct evidence that the owner wrote or independently
 designed them. Record owner questions and challenges as review contributions,
 but do not relabel them as decisions unless they changed or selected an outcome.
 Never infer owner authorship from Git author metadata.
+
+## Development logging and independent diagnostics
+
+The owner requires practical diagnostics as part of implementation and
+acceptance, not as optional follow-up work. When a subsystem is created or
+substantially changed:
+
+1. Use the `search_quality.<module>` logger namespaces documented in
+   `docs/LOGGING.md`; each runtime area must be independently configurable and
+   filterable.
+2. Emit structured, low-noise boundary events with UTC time, stable event name,
+   trace/request/Run identifiers, non-sensitive operation context, duration and
+   actionable error type.
+3. Keep per-Query or similarly verbose events at `DEBUG`; production defaults
+   must not expose them.
+4. Never log raw Query text, titles/descriptions, vectors, payloads, passwords,
+   tokens, secrets, authorization/cookie headers or unnecessary personal data.
+5. Keep deterministic experiment evidence separate from nondeterministic
+   execution diagnostics. Trace IDs, timestamps and wall-clock duration must
+   not change semantic Run identity.
+6. Document enable/disable/filter/export/retention and independent reproduction
+   steps, and test representative success, failure, redaction and module-control
+   paths.
+
+Persistent application log files require explicit rotation and retention. The
+current CLI/API design emits to stderr; production retention belongs to
+journald, while Run JSON remains the immutable experiment record.

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from apps.api.main import app, health, smoke
+from apps.api.main import SmokeRequest, app, health, smoke, smoke_post
 from search_quality.smoke import run_smoke
 
 SAMPLE_PATH = Path(__file__).parents[1] / "data" / "samples" / "products.json"
@@ -31,6 +31,7 @@ def test_api_health_and_smoke() -> None:
     assert (
         smoke(query="wireless mouse", top_k=2, backend="local")["deterministic"] is True
     )
+    assert smoke_post(SmokeRequest(query="wireless mouse", top_k=2))["deterministic"]
 
 
 def test_api_local_preview_cors_is_restricted() -> None:
@@ -43,7 +44,7 @@ def test_api_local_preview_cors_is_restricted() -> None:
         "http://127.0.0.1:4173",
         "http://localhost:4173",
     ]
-    assert cors.kwargs["allow_methods"] == ["GET"]
+    assert cors.kwargs["allow_methods"] == ["GET", "POST"]
 
 
 def test_api_rejects_unknown_backend() -> None:

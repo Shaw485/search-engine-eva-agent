@@ -9,7 +9,15 @@ Group=www-data
 WorkingDirectory=/var/www/search-engine-eva-agent
 Environment=PYTHONUNBUFFERED=1
 Environment=SEARCH_BACKEND=local
-ExecStart=/var/www/search-engine-eva-agent/.venv/bin/python -m uvicorn apps.api.main:app --host 127.0.0.1 --port 8010
+Environment=SEARCH_LOG_FORMAT=json
+Environment=SEARCH_LOG_LEVEL=WARNING
+Environment=SEARCH_LOG_LEVEL_API=INFO
+Environment=SEARCH_LOG_LEVEL_BACKEND=WARNING
+Environment=SEARCH_LOG_LEVEL_RANKING=OFF
+ExecStart=/var/www/search-engine-eva-agent/.venv/bin/python -m uvicorn apps.api.main:app --host 127.0.0.1 --port 8010 --no-access-log
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=search-engine-eva-agent
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true

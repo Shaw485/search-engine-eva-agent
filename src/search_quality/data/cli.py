@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 from search_quality.data.contracts import (
@@ -11,8 +12,16 @@ from search_quality.data.contracts import (
     validate_source_files,
 )
 from search_quality.data.esci import build_stage1
+from search_quality.observability import (
+    add_logging_arguments,
+    classify_error,
+    configure_logging_from_args,
+    logging_context,
+    new_trace_id,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+logger = logging.getLogger("search_quality.data")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -48,15 +57,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="verify pinned files without materializing derived data",
     )
+    add_logging_arguments(parser)
     return parser
 
 
-def main() -> None:
-    args = build_parser().parse_args()
+def _execute(args: argparse.Namespace) -> None:
     config = Stage1Config.from_path(args.config)
     lock = load_dataset_lock(args.lock)
     if args.validate_only:
         validate_source_files(args.source_dir, lock)
+        logger.info("source_validation_completed", extra={"source_commit": lock.commit})
         print(f"ESCI source validation passed for commit {lock.commit}")
         return
     manifest = build_stage1(
@@ -68,12 +78,39 @@ def main() -> None:
         report_path=args.report,
         project_root=PROJECT_ROOT,
     )
+    logger.info(
+        "stage1_build_completed",
+        extra={
+            "dev_queries": manifest["profiles"]["dev"]["queries"],
+            "smoke_queries": manifest["profiles"]["smoke"]["queries"],
+            "test_queries": manifest["profiles"]["test"]["queries"],
+        },
+    )
     print(
         "Stage 1 ESCI build complete: "
         f"{manifest['profiles']['smoke']['queries']} smoke queries, "
         f"{manifest['profiles']['dev']['queries']} dev queries, "
         f"{manifest['profiles']['test']['queries']} frozen test queries"
     )
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    configure_logging_from_args(args)
+    operation = "source_validation" if args.validate_only else "stage1_build"
+    with logging_context(trace_id=new_trace_id(), operation=operation):
+        logger.info("data_command_started")
+        try:
+            _execute(args)
+        except Exception as exc:
+            logger.error(
+                "data_command_failed",
+                extra={
+                    "error_code": classify_error(exc),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

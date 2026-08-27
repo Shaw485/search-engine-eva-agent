@@ -10,9 +10,11 @@ to a dataset version, run configuration, metric, and ranked product list.
 **Stage 2 Search Evaluation Harness: in progress.** The Stage 1 technical data
 gate is complete, while its owner learning check remains pending. The repository
 now includes hand-verified nDCG, MRR and Success metrics, the versioned
-`esci-primary-v1` relevance policy, and a deterministic title-BM25 candidate
-reranking smoke run. Routine Stage 2 commands accept only smoke/dev data; the
-8,956-Query frozen test remains unavailable to tuning runs.
+`esci-primary-v1` relevance policy, a shared label-blind Ranker Harness, and
+deterministic random, keyword-overlap and title-BM25 comparators. Routine Stage
+2 execution is currently smoke-only: the 500-Query dev profile is code-locked
+until the Owner data-boundary checkpoint is recorded, and the 8,956-Query frozen
+test remains unavailable to tuning runs.
 
 The optional OpenSearch 3.8.0 adapter, mapping, and Apple Silicon-compatible
 Compose profile are implemented. Live container verification remains pending
@@ -27,6 +29,7 @@ explicit pending integration check, not an implicit fallback or a claimed pass.
 - Backend decision: [docs/adr/001-search-backend.md](docs/adr/001-search-backend.md)
 - Required learning: [docs/LEARNING_CHECKPOINTS.md](docs/LEARNING_CHECKPOINTS.md)
 - Decision and contribution provenance: [docs/CONTRIBUTION_LOG.md](docs/CONTRIBUTION_LOG.md)
+- Logging and independent diagnostics: [docs/LOGGING.md](docs/LOGGING.md)
 - Portfolio deployment: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 - Live Stage 0 experience: [shawspace.cn/search-eval.html](https://shawspace.cn/search-eval.html)
 
@@ -51,8 +54,13 @@ make test
 make data-sample
 make smoke
 make eval-baseline
+EVAL_RANKER=title-bm25 make eval-baseline
 QUERY="iphone 15 pro case" make smoke
 ```
+
+`make eval-baseline` runs all three deterministic comparators on the fixed
+20-Query smoke profile. The smoke results validate the Harness; they are not a
+formal quality decision.
 
 The Stage 1 data path is separate so CI never downloads the 1.16 GB source:
 
@@ -67,7 +75,9 @@ Start the Stage 0 API with:
 ```bash
 make api
 curl http://127.0.0.1:8000/health
-curl 'http://127.0.0.1:8000/smoke?query=wireless%20mouse&top_k=3'
+curl --request POST 'http://127.0.0.1:8000/smoke' \
+  --header 'Content-Type: application/json' \
+  --data '{"query":"wireless mouse","top_k":3,"backend":"local"}'
 ```
 
 ## What the Stage 0 vector result means
@@ -165,7 +175,8 @@ not presented as full-catalog recall.
 
 ## Next step
 
-Complete the Stage 1 owner checkpoint on Query-level leakage, then promote the
-title-BM25 smoke run to the full 500-Query dev profile and add deterministic
-random/keyword-overlap comparators. Frozen test stays closed until a milestone
-release gate.
+Complete the Stage 1 Owner checkpoint on Query-level leakage and incomplete
+judgments, then explicitly unlock and run the three comparators on the fixed
+500-Query dev profile. Complete the Stage 2 metric check before interpreting
+that comparison or entering the Agent MVP. Frozen test stays closed until a
+milestone release gate.

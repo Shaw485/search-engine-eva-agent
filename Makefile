@@ -4,6 +4,7 @@ VENV_PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 QUERY ?= wireless mouse
 EVAL_PROFILE ?= smoke
+EVAL_RANKER ?= all
 
 .PHONY: help setup format lint policy check test smoke data-sample data-download \
 	data-esci-validate data-esci-build api opensearch-up opensearch-down \
@@ -26,7 +27,7 @@ help:
 	@echo "smoke-opensearch  Run the same smoke contract against OpenSearch"
 	@echo "opensearch-down   Stop the optional OpenSearch service"
 
-	@echo "eval-baseline     Run the Stage 2 BM25 smoke evaluation"
+	@echo "eval-baseline     Run all three Stage 2 smoke comparators"
 
 setup:
 	$(PYTHON) -m venv $(VENV)
@@ -65,7 +66,7 @@ data-esci-build:
 	$(VENV_PYTHON) -m search_quality.data.cli
 
 api:
-	$(VENV_PYTHON) -m uvicorn apps.api.main:app --host 127.0.0.1 --port 8000
+	$(VENV_PYTHON) -m uvicorn apps.api.main:app --host 127.0.0.1 --port 8000 --no-access-log
 
 opensearch-up:
 	docker compose up -d opensearch
@@ -79,7 +80,7 @@ opensearch-down:
 
 eval-baseline:
 	$(VENV_PYTHON) -m search_quality.evaluation.cli \
-		--profile "$(EVAL_PROFILE)"
+		--profile "$(EVAL_PROFILE)" --ranker "$(EVAL_RANKER)"
 
 web:
 	@echo "Stage 7 command reserved: the Web product is not implemented in Stage 0." >&2

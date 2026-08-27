@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import math
 import os
 import re
@@ -24,6 +25,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_INDEX_CONFIG = PROJECT_ROOT / "configs" / "opensearch" / "products-index.json"
 SAFE_INDEX_RE = re.compile(r"search-quality-[a-z0-9][a-z0-9._-]*\Z")
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+logger = logging.getLogger("search_quality.backend.opensearch")
 
 
 class OpenSearchError(RuntimeError):
@@ -70,6 +72,11 @@ class OpenSearchBackend:
             or parsed_url.hostname not in LOCAL_HOSTS
         ):
             raise ValueError("Stage 0 OpenSearch smoke is restricted to localhost")
+        if parsed_url.username or parsed_url.password:
+            raise ValueError(
+                "OpenSearch credentials must use dedicated environment fields, "
+                "not URL userinfo"
+            )
         self._validate_index_name(self.index_name)
 
     @classmethod
@@ -174,12 +181,16 @@ class OpenSearchBackend:
             expected_statuses={200},
         )
         if result.get("errors"):
-            failures = [
-                item
+            failure_statuses = [
+                int(item.get("index", {}).get("status", 500))
                 for item in result.get("items", [])
                 if int(item.get("index", {}).get("status", 500)) >= 300
             ]
-            raise OpenSearchError(f"bulk indexing failed: {failures[:3]}")
+            raise OpenSearchError(
+                "OpenSearch bulk indexing failed for "
+                f"{len(failure_statuses)} documents; "
+                f"statuses={sorted(set(failure_statuses))}"
+            )
 
     def search_lexical(self, query: str, top_k: int = 5) -> list[SearchHit]:
         self._validate_text_search(query, top_k)
@@ -243,25 +254,48 @@ class OpenSearchBackend:
         return self._parse_hits(result, strategy="vector")
 
     def wait_until_ready(self) -> None:
+        started = time.perf_counter()
         deadline = time.monotonic() + self.readiness_timeout_seconds
         last_error: Exception | None = None
+        attempt_count = 0
         while time.monotonic() < deadline:
+            attempt_count += 1
             try:
                 health = self._request_json(
                     "GET",
                     "/_cluster/health?wait_for_status=yellow&timeout=1s",
                     expected_statuses={200},
+                    log_failures=False,
                 )
                 if health.get("status") in {"yellow", "green"}:
+                    logger.info(
+                        "opensearch_readiness_completed",
+                        extra={
+                            "attempt_count": attempt_count,
+                            "duration_ms": round(
+                                (time.perf_counter() - started) * 1000, 3
+                            ),
+                        },
+                    )
                     return
             except (OpenSearchError, OSError) as exc:
                 last_error = exc
             time.sleep(0.5)
-        detail = f": {last_error}" if last_error else ""
-        raise OSError(
-            f"OpenSearch was not ready at {self.base_url} within "
-            f"{self.readiness_timeout_seconds:.0f}s{detail}"
+        logger.error(
+            "opensearch_readiness_failed",
+            extra={
+                "attempt_count": attempt_count,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                "error_code": "opensearch_readiness_timeout",
+                "last_error_type": (
+                    type(last_error).__name__ if last_error is not None else "none"
+                ),
+            },
         )
+        raise OSError(
+            "OpenSearch did not become ready within "
+            f"{self.readiness_timeout_seconds:.0f}s"
+        ) from last_error
 
     def _validate_text_search(self, query: str, top_k: int) -> None:
         if not query.strip():
@@ -321,6 +355,7 @@ class OpenSearchBackend:
         raw_body: bytes | None = None,
         content_type: str = "application/json",
         expected_statuses: set[int],
+        log_failures: bool = True,
     ) -> dict[str, Any]:
         if payload is not None and raw_body is not None:
             raise ValueError("provide payload or raw_body, not both")
@@ -343,6 +378,13 @@ class OpenSearchBackend:
             headers=headers,
             method=method,
         )
+        operation = self._request_operation(path)
+        started = time.perf_counter()
+        failure_log = logger.error if log_failures else logger.debug
+        logger.debug(
+            "opensearch_request_started",
+            extra={"backend_operation": operation, "method": method},
+        )
         try:
             response: HTTPResponse
             with urlopen(request, timeout=self.request_timeout_seconds) as response:
@@ -351,25 +393,110 @@ class OpenSearchBackend:
         except HTTPError as exc:
             if exc.code in expected_statuses:
                 response_body = exc.read()
+                logger.debug(
+                    "opensearch_request_completed",
+                    extra={
+                        "backend_operation": operation,
+                        "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                        "method": method,
+                        "status_code": exc.code,
+                    },
+                )
                 if not response_body:
                     return {}
                 return json.loads(response_body.decode("utf-8"))
-            detail = exc.read().decode("utf-8", errors="replace")
+            exc.read()
+            failure_log(
+                "opensearch_request_failed",
+                extra={
+                    "backend_operation": operation,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                    "error_code": "opensearch_http_error",
+                    "error_type": type(exc).__name__,
+                    "method": method,
+                    "status_code": exc.code,
+                },
+            )
             raise OpenSearchError(
-                f"OpenSearch {method} {path} returned {exc.code}: {detail[:500]}"
+                f"OpenSearch {method} {path} returned status {exc.code}"
             ) from exc
         except URLError as exc:
-            raise OSError(f"cannot reach OpenSearch at {self.base_url}: {exc}") from exc
+            failure_log(
+                "opensearch_request_failed",
+                extra={
+                    "backend_operation": operation,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                    "error_code": "opensearch_unreachable",
+                    "error_type": type(exc).__name__,
+                    "method": method,
+                },
+            )
+            raise OSError(
+                "cannot reach the configured local OpenSearch service"
+            ) from exc
+        except OSError as exc:
+            failure_log(
+                "opensearch_request_failed",
+                extra={
+                    "backend_operation": operation,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                    "error_code": "opensearch_io_failure",
+                    "error_type": type(exc).__name__,
+                    "method": method,
+                },
+            )
+            raise
 
         if status not in expected_statuses:
+            failure_log(
+                "opensearch_request_failed",
+                extra={
+                    "backend_operation": operation,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                    "error_code": "opensearch_unexpected_status",
+                    "method": method,
+                    "status_code": status,
+                },
+            )
             raise OpenSearchError(
                 f"OpenSearch {method} {path} returned unexpected status {status}"
             )
+        logger.debug(
+            "opensearch_request_completed",
+            extra={
+                "backend_operation": operation,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                "method": method,
+                "status_code": status,
+            },
+        )
         if not response_body:
             return {}
         try:
             return json.loads(response_body.decode("utf-8"))
         except json.JSONDecodeError as exc:
+            failure_log(
+                "opensearch_response_rejected",
+                extra={
+                    "backend_operation": operation,
+                    "error_code": "opensearch_invalid_json",
+                    "error_type": type(exc).__name__,
+                    "method": method,
+                    "status_code": status,
+                },
+            )
             raise OpenSearchError(
                 f"OpenSearch {method} {path} returned invalid JSON"
             ) from exc
+
+    @staticmethod
+    def _request_operation(path: str) -> str:
+        if path == "/":
+            return "cluster_identity"
+        if path.startswith("/_cluster/health"):
+            return "cluster_health"
+        if path.startswith("/_bulk"):
+            return "bulk_index"
+        if path.endswith("/_search"):
+            return "search"
+        return "index_admin"

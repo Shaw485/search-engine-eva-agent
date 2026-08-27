@@ -142,8 +142,14 @@ ESCI 标签覆盖的是给定 Query 下的已判断候选商品，并不是完�
 4. 实现随机、关键词重叠、标题 BM25 三条基线。
 5. 将全量标题 BM25 探索代码沉淀为可测试模块和 CLI。
 6. 对固定 smoke/dev 运行候选集重排。
-7. 为每次实验保存 Run Manifest：数据、代码、配置、指标、延迟和随机种子。
+7. 为每次实验保存 Run Manifest：数据、代码、配置、指标和随机种子；动态延迟只进入诊断日志。
 8. 实现 `compare_runs`，输出总体变化和逐 Query 排名 Diff。
+9. 为 data、evaluation、ranking、backend 和 API 提供可独立过滤的结构化诊断日志；动态 Trace/耗时不得改变确定性 Run 身份。
+
+当前安全进度：三条 Ranker 已接入统一 Harness，但只允许在固定 smoke
+profile 上执行。Owner 数据边界检查点记录完成前，共享正式评测入口与 CLI
+都在读取数据前拒绝 500-Query dev；frozen test 始终不进入 routine CLI。
+这一窄增量尚未实现第 8 项 `compare_runs`，因此不表示阶段 2 已完成。
 
 验收：
 

@@ -43,6 +43,11 @@ commit permission are authorizations rather than architecture contributions.
 Generated code and tests remain attributed to Codex unless direct evidence says
 otherwise.
 
+The owner also explicitly requires per-module development logging and
+independent diagnostics. New or substantially changed runtime paths must use
+structured traceable events, safe redaction, production low-noise defaults and
+documented enable/filter/retention procedures from `docs/LOGGING.md`.
+
 ## Current engineering state
 
 - Stage 0 mandatory local path accepted on 2026-08-25.
@@ -53,8 +58,13 @@ otherwise.
 - Stage 1 aggregate evidence lives in `docs/STAGE_1_REPORT.md` and
   `data/manifests/esci-stage1.json`; large raw and processed data stay ignored.
 - Stage 2 now includes hand-verified nDCG, MRR, and Success metrics; the
-  versioned `esci-primary-v1` relevance policy; and a deterministic title-BM25
-  candidate-reranking smoke run with evidence in `docs/STAGE_2_SMOKE_REPORT.md`.
+  versioned `esci-primary-v1` relevance policy; a shared label-blind Ranker
+  contract; and deterministic fixed-seed random, keyword-overlap and title-BM25
+  comparators on the 20-Query smoke profile.
+- Module-level structured diagnostics cover data, evaluation, ranking, backend
+  and API boundaries. The shared formal evaluation entry point rejects the
+  500-Query dev profile before file access while the Owner data-boundary
+  checkpoint is pending.
 - The Stage 2 smoke result is nDCG@5 0.659606, nDCG@10 0.719098, MRR@10
   0.851667, Success@1 0.75, and Success@5 1.0. It is a judged-candidate rerank,
   not the separate 482,105-product exploratory full-corpus search.

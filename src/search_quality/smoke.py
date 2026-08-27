@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -14,11 +16,19 @@ from .backends.base import MAX_TOP_K, SearchBackend
 from .backends.local import LocalSearchBackend
 from .embedding import DeterministicHashEmbedder, EmbeddingProvider
 from .models import ProductDocument
+from .observability import (
+    add_logging_arguments,
+    classify_error,
+    configure_logging_from_args,
+    logging_context,
+    new_trace_id,
+)
 from .sample_data import load_products
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SAMPLE_PATH = PROJECT_ROOT / "data" / "samples" / "products.json"
 _OPENSEARCH_SMOKE_LOCK = threading.Lock()
+logger = logging.getLogger("search_quality.backend")
 
 
 def create_backend(name: str) -> SearchBackend:
@@ -38,22 +48,54 @@ def run_smoke(
     top_k: int = 5,
     sample_path: str | Path = DEFAULT_SAMPLE_PATH,
 ) -> dict[str, Any]:
-    if backend_name == "opensearch":
-        # The Stage 0 adapter rebuilds one fixed local index. Serialize API calls
-        # in this process so delete/create/bulk sequences cannot interleave.
-        with _OPENSEARCH_SMOKE_LOCK:
-            return _run_smoke(
+    started = time.perf_counter()
+    safe_backend_name = (
+        backend_name if backend_name in {"local", "opensearch"} else "unsupported"
+    )
+    logger.info(
+        "smoke_search_started",
+        extra={"backend": safe_backend_name, "top_k": top_k},
+    )
+    try:
+        if backend_name == "opensearch":
+            # The adapter rebuilds one fixed local index. Serialize API calls so
+            # delete/create/bulk sequences cannot interleave in this process.
+            with _OPENSEARCH_SMOKE_LOCK:
+                result = _run_smoke(
+                    backend_name=backend_name,
+                    query=query,
+                    top_k=top_k,
+                    sample_path=sample_path,
+                )
+        else:
+            result = _run_smoke(
                 backend_name=backend_name,
                 query=query,
                 top_k=top_k,
                 sample_path=sample_path,
             )
-    return _run_smoke(
-        backend_name=backend_name,
-        query=query,
-        top_k=top_k,
-        sample_path=sample_path,
+    except Exception as exc:
+        logger.error(
+            "smoke_search_failed",
+            extra={
+                "backend": safe_backend_name,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                "error_code": classify_error(exc),
+                "error_type": type(exc).__name__,
+                "top_k": top_k,
+            },
+        )
+        raise
+    logger.info(
+        "smoke_search_completed",
+        extra={
+            "backend": safe_backend_name,
+            "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+            "product_count": result["product_count"],
+            "top_k": top_k,
+        },
     )
+    return result
 
 
 def _run_smoke(
@@ -134,7 +176,7 @@ def _run_smoke(
     }
 
 
-def parse_args() -> argparse.Namespace:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--backend",
@@ -147,17 +189,27 @@ def parse_args() -> argparse.Namespace:
         "--sample-path",
         default=os.environ.get("SEARCH_SAMPLE_PATH", str(DEFAULT_SAMPLE_PATH)),
     )
-    return parser.parse_args()
+    add_logging_arguments(parser)
+    return parser
+
+
+def parse_args() -> argparse.Namespace:
+    return build_parser().parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    result = run_smoke(
-        backend_name=args.backend,
-        query=args.query,
-        top_k=args.top_k,
-        sample_path=args.sample_path,
-    )
+    configure_logging_from_args(args)
+    with logging_context(trace_id=new_trace_id(), operation="stage0_smoke"):
+        try:
+            result = run_smoke(
+                backend_name=args.backend,
+                query=args.query,
+                top_k=args.top_k,
+                sample_path=args.sample_path,
+            )
+        except Exception:
+            raise SystemExit(1) from None
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
 
 
