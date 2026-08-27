@@ -33,6 +33,7 @@ explicit pending integration check, not an implicit fallback or a claimed pass.
 - Stage 0 evidence: [docs/STAGE_0_REPORT.md](docs/STAGE_0_REPORT.md)
 - Stage 1 evidence: [docs/STAGE_1_REPORT.md](docs/STAGE_1_REPORT.md)
 - Stage 2 smoke evidence: [docs/STAGE_2_SMOKE_REPORT.md](docs/STAGE_2_SMOKE_REPORT.md)
+- Full-catalog build/API evidence: [docs/FULL_CATALOG_BASELINE_REPORT.md](docs/FULL_CATALOG_BASELINE_REPORT.md)
 - Data dictionary: [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md)
 - Backend decision: [docs/adr/001-search-backend.md](docs/adr/001-search-backend.md)
 - Full-catalog baseline decision: [docs/adr/002-full-catalog-baseline.md](docs/adr/002-full-catalog-baseline.md)
