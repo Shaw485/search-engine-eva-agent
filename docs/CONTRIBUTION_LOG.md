@@ -43,7 +43,7 @@
 | D-010 | Stage 2 首条正式 Ranker 是 title-only candidate BM25，`k1=1.5`、`b=0.75`，IDF 在单 Query 的完整候选集内计算，并返回全部候选 | 需要一个最小、确定、可解释的正式基线 | **Codex 设计** | 当前作为 smoke 基线采用；参数尚未由 Owner选择或调优 | Codex 实现、运行 116 项测试并记录 smoke 证据；commits `96123ab`、`9c33c09` | Codex-designed/implemented |
 | D-011 | 以后所有重要决定都要区分 Owner 决策、Codex 提案/实现和共同迭代，供面试核验 | **Owner 主动提出** | Owner 定义要求；Codex 设计五角色台账 | **Owner** | Codex 建立本文并把维护规则写入项目指令 | Owner-originated + Codex operationalization |
 | D-012 | 软件模块必须具备可独立启停、过滤和排障的结构化日志；默认保护敏感信息并控制生产噪声与保留 | **Owner 通过项目开发指令主动提出** | Owner 定义质量要求；Codex 设计标准库日志、模块级开关、Trace ID、脱敏和 journald 方案 | **Owner 决定必须具备该能力**；具体技术设计由 Codex 完成 | Codex 实现 `observability.py`、API/CLI 埋点、安全错误、部署配置、文档与测试 | Owner-originated requirement + Codex operationalization |
-| D-013 | Stage 2 三条 smoke 比较器共用一个 label-blind Harness：固定种子随机、标题关键词重叠、标题 BM25；在 Owner 数据边界检查点完成前代码硬锁 500-Query dev | 路线图需要可解释的质量下限和防止过早查看 dev | **Codex 设计** | Owner 的“继续”只授权继续执行，没有证据表明其独立选择了算法、seed、计分或门禁实现 | Codex 实现统一 Ranker 契约、比较器、CLI、门禁和测试；Owner 后续负责知识检查与是否解锁 dev 的判断 | Codex-designed/implemented; Owner operational authorization |
+| D-013 | Stage 2 三条 smoke 比较器共用一个 label-blind Harness：固定种子随机、标题关键词重叠、标题 BM25；在 Owner 数据边界检查点完成前代码硬锁 500-Query dev | 路线图需要可解释的质量下限和防止过早查看 dev | **Codex 设计** | Owner 的“继续”只授权继续执行，没有证据表明其独立选择了算法、seed、计分或门禁实现 | Codex 实现统一 Ranker 契约、比较器、CLI、共享门禁、172 项测试和三条 smoke Run；实现 commit `22877b0` | Codex-designed/implemented; Owner operational authorization |
 
 ### 尚未拍板的提案
 

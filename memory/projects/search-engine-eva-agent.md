@@ -65,6 +65,10 @@ documented enable/filter/retention procedures from `docs/LOGGING.md`.
   and API boundaries. The shared formal evaluation entry point rejects the
   500-Query dev profile before file access while the Owner data-boundary
   checkpoint is pending.
+- Smoke evidence at revision `22877b0`: random `random-862694f9c87e`, keyword
+  overlap `overlap-7ced66a13013`, and title BM25 `bm25-9dceb197b199`. BM25 leads
+  smoke nDCG@10, while overlap leads MRR@10/Success@1; no quality decision is
+  justified before dev plus per-Query comparison.
 - The Stage 2 smoke result is nDCG@5 0.659606, nDCG@10 0.719098, MRR@10
   0.851667, Success@1 0.75, and Success@5 1.0. It is a judged-candidate rerank,
   not the separate 482,105-product exploratory full-corpus search.
