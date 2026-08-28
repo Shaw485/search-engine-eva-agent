@@ -27,7 +27,7 @@ logger = logging.getLogger("search_quality.agent_optimization.strategy_search")
 
 STRATEGY_SEARCH_SCHEMA_VERSION = "strategy-search-v1"
 SELECTION_SCORE_POLICY_VERSION = "exact-boost-selection-score-v1"
-GATE_POLICY_VERSION = "smoke-release-gates-v1"
+GATE_POLICY_VERSION = "smoke-release-gates-v2"
 ROOT_CAUSE_ORDER = (
     "numeric_token",
     "coverage_gap",
@@ -219,7 +219,7 @@ class CandidateSelection(StrictModel):
 
 
 class GatePolicy(StrictModel):
-    policy_version: Literal["smoke-release-gates-v1"] = GATE_POLICY_VERSION
+    policy_version: Literal["smoke-release-gates-v2"] = GATE_POLICY_VERSION
     min_ndcg_at_10_delta: DeltaFloat = 1e-12
     min_ndcg_at_5_delta: DeltaFloat = -0.02
     min_mrr_at_10_delta: DeltaFloat = 0.0

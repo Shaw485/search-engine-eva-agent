@@ -148,7 +148,7 @@ An average improvement alone is insufficient. A candidate must be checked for:
 
 The gate policy is versioned evidence. Approval ignores thresholds supplied by
 the proposal and recomputes the selected evaluation with the service's trusted
-`smoke-release-gates-v1` policy. Thresholds shown by the implementation are
+`smoke-release-gates-v2` policy. Thresholds shown by the implementation are
 engineering defaults until the Owner explicitly adopts them as product policy.
 A candidate that fails a hard gate can still be shown as an experiment, but it
 cannot be presented as safe to activate.

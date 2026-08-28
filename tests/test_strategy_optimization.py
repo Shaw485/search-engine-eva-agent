@@ -429,10 +429,17 @@ def test_strategy_decision_approve_updates_catalog_and_is_idempotent(
         proposal_id=proposal["proposal_id"],
         decision="approve",
     )
-    second = apply_strategy_decision(
+
+    def fail_if_revision_is_reloaded(_root: Path) -> str:
+        raise AssertionError(
+            "an existing decision must be returned before revision load"
+        )
+
+    second = _apply_strategy_decision(
         project_root=project,
         proposal_id=proposal["proposal_id"],
         decision="approve",
+        revision_provider=fail_if_revision_is_reloaded,
     )
 
     catalog = load_strategy_catalog(project_root=project)

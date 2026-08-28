@@ -357,28 +357,23 @@ def apply_strategy_decision(
         raise ValueError("invalid proposal_id")
     root = Path(project_root).resolve(strict=True)
     run_store = _resolve_artifact_root(root, artifact_root)
-    expected_code_revision: str | None = None
-    if decision == "approve":
-        expected_code_revision = revision_provider(root).strip()
-        if not CODE_REVISION_PATTERN.fullmatch(expected_code_revision):
-            raise ValueError("approval code revision must be a full Git commit SHA")
     with _strategy_decision_lock(run_store):
         return _apply_strategy_decision_locked(
-            expected_code_revision=expected_code_revision,
             root=root,
             run_store=run_store,
             proposal_id=proposal_id,
             decision=decision,
+            revision_provider=revision_provider,
         )
 
 
 def _apply_strategy_decision_locked(
     *,
-    expected_code_revision: str | None,
     root: Path,
     run_store: Path,
     proposal_id: str,
     decision: Literal["approve", "reject"],
+    revision_provider: Callable[[Path], str],
 ) -> dict[str, Any]:
     proposal_path = run_store / "strategy-proposals" / f"{proposal_id}.json"
     proposal = _load_proposal(proposal_path)
@@ -391,6 +386,9 @@ def _apply_strategy_decision_locked(
         raise ValueError("only pending proposals can be decided")
     strategy = proposal["strategy"]
     if decision == "approve":
+        expected_code_revision = revision_provider(root).strip()
+        if not CODE_REVISION_PATTERN.fullmatch(expected_code_revision):
+            raise ValueError("approval code revision must be a full Git commit SHA")
         active_strategy = _load_active_strategy(run_store)
         target_active = _strategy_active_entry(proposal)
         replaying_activation = active_strategy == target_active
@@ -1086,7 +1084,7 @@ def _validate_proposal_evidence(
     proposal: dict[str, Any],
     *,
     active_strategy: dict[str, Any] | None,
-    expected_code_revision: str | None,
+    expected_code_revision: str,
 ) -> None:
     baseline_run_id = proposal.get("baseline_run_id")
     candidate_run_id = proposal.get("candidate_run_id")
@@ -1120,7 +1118,7 @@ def _validate_proposal_evidence(
     )
     if rebuilt_comparison != stored_comparison:
         raise ValueError("stored comparison does not match trusted Run evidence")
-    if expected_code_revision is None or any(
+    if any(
         revision != expected_code_revision
         for revision in (
             baseline.get("code_revision"),
