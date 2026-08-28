@@ -6,28 +6,28 @@
 
 ## One-sentence mental model
 
-The Agent is not the search engine. The Agent is the controller that asks the
-search evaluation tools what happened, observes the evidence, then decides
-whether to inspect more, stop, accept, reject, or say the evidence is
-inconclusive.
+The Agent is not the search engine. The Agent is the controller that finds bad
+cases, proposes bounded search-strategy changes, asks the evaluation tools what
+happened, observes the evidence, then prepares an approval decision for a human.
 
 ## Current vertical slice
 
 ```mermaid
 flowchart TD
-    A[1. AgentTask: compare two smoke Runs]
-    B[2. Planner: choose one next step]
-    C[3. Runtime Harness: check policy, budget and schema]
-    D[4. Tool: call Search Evaluation Harness]
-    E[5. Observation: metrics and Query evidence return]
-    F{6. Branch on observation}
-    G[inspect_query: drill into regression]
-    H[finish: accept, reject or inconclusive]
-    I[Trace and Replay: preserve the path]
+    A[1. AgentTask: improve current search]
+    B[2. Agent searches or samples bad cases]
+    C[3. Planner proposes one bounded strategy]
+    D[4. Runtime Harness checks policy, budget and schema]
+    E[5. Harness runs baseline and candidate]
+    F[6. compare_runs returns metric and Query evidence]
+    G{7. Branch on evidence}
+    H[inspect_query: drill into regressions]
+    I[Approval panel: update, reject or keep experimenting]
+    J[Trace and Replay: preserve the path]
 
-    A --> B --> C --> D --> E --> F
-    F -->|regression exists| G --> B
-    F -->|enough evidence| H --> I
+    A --> B --> C --> D --> E --> F --> G
+    G -->|regression exists| H --> C
+    G -->|evidence ready| I --> J
 ```
 
 The important loop is:
@@ -43,19 +43,24 @@ branches based on the comparison result.
 ## What happens in the real smoke run
 
 ```text
-1. Task asks the Agent to compare random and BM25 smoke Runs.
-2. Planner asks Runtime to call compare_runs.
-3. Runtime validates the tool name, capability, Run IDs and schema.
-4. compare_runs returns aggregate metrics and the worst Query regressions.
-5. Planner sees regressions, so it calls inspect_query for the worst one.
-6. The final report says inconclusive and cites both comparison and Query
-   evidence.
-7. Trace records the path, and Replay can check it later.
+1. Task asks the Agent to improve the current search baseline.
+2. Agent samples current results or reads evaluation Runs to find bad cases.
+3. Planner proposes one bounded strategy, such as a field-weight change.
+4. Runtime validates the proposal and allowed tool calls.
+5. Harness runs baseline and candidate under the same data boundary.
+6. compare_runs returns aggregate metrics and worst regressions.
+7. Agent summarizes the proposal, sample before/after results, metric deltas,
+   local risks and evidence in an approval panel.
+8. Human clicks update or reject. Only after approval does the system write a
+   versioned strategy config and trigger validation.
+9. Trace records the path, and Replay can check it later.
 ```
 
 For the latest observed path, BM25 improved the average primary metric but still
-had regressed queries. The Agent therefore did not blindly accept the candidate.
-It inspected the largest regression and returned `inconclusive`.
+had regressed queries. The Agent therefore should not blindly accept the
+candidate. The target product behavior is to inspect the regression, propose a
+bounded follow-up strategy, run the Harness again, then ask the human to approve
+or reject the update.
 
 ## Two different systems that touch each other
 
@@ -67,7 +72,8 @@ Search evaluation path
 Ranked products + ESCI labels -> metrics -> Run artifact
 
 Agent path
-Task -> Planner -> Runtime -> tools -> observations -> Trace -> final report
+Task -> bad-case discovery -> strategy proposal -> Runtime -> tools ->
+observations -> approval panel -> Trace
 ```
 
 These three paths should stay separate in your head:
@@ -76,7 +82,7 @@ These three paths should stay separate in your head:
 |---|---|---|
 | Search system | What products should this query return? | full-catalog title BM25 search on the website |
 | Search evaluation | Did one ranking strategy beat another? | random vs keyword overlap vs title BM25 on smoke |
-| Agent | What should I inspect next, and what can I conclude from evidence? | compare runs, inspect worst regression, then finish |
+| Agent | What should I inspect, what strategy should I try, and should a human approve it? | find bad cases, propose a strategy, compare Runs, show an approval panel |
 
 ## What is real now
 
@@ -90,7 +96,7 @@ These three paths should stay separate in your head:
 | Replay | Real | A historical Trace can be checked without rerunning tools. |
 | Planner intelligence | Scaffold | It is deterministic, not an LLM yet. |
 | Data scope | Smoke only | It cannot use 500-query dev or frozen test yet. |
-| Optimization ability | Not yet | It diagnoses evidence; it does not tune ranking configs yet. |
+| Optimization ability | Target behavior | It should propose bounded strategy changes, but only apply them after approval. |
 
 ## Code map
 
@@ -122,13 +128,24 @@ That is different from the Search Evaluation Harness. Search Evaluation Harness
 scores rankers. Agent Evaluation Harness scores whether the Agent completed its
 diagnosis task correctly.
 
+## What Stage 7/8 will add
+
+Stage 7 turns the Agent from passive comparison into proactive optimization:
+
+```text
+find bad case -> propose strategy -> run Harness -> compare -> approval panel
+```
+
+Stage 8 puts this into the website. The human should see the proposed strategy,
+sample before/after rankings, metric changes, local regressions and evidence
+IDs, then click `Update Strategy` or `Reject Strategy`.
+
 ## Interview-safe explanation
 
 You can say:
 
-> The current system has a smoke-only Agent Runtime scaffold. It already has
-> tool schemas, permission gates, budget limits, evidence grounding, Trace and
-> Replay. The Planner is intentionally deterministic for now, so it proves the
-> control and evidence path, not final LLM reasoning. The next milestone is an
-> Agent Evaluation Harness with fixed tasks to measure whether the Agent really
-> completes diagnosis work.
+> The product direction is an approval-gated search optimization Agent. It
+> should find bad cases, propose bounded strategy changes, run the Harness,
+> compare before/after evidence, and show a panel where humans approve or reject
+> the update. The current code has the smoke-only Runtime and evidence scaffold;
+> proactive strategy proposal and the approval panel are the next capabilities.

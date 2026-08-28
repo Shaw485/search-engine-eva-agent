@@ -10,7 +10,9 @@
 
 ## 1. 最终产品是什么
 
-最终产品不是一个搜索页面，也不是若干排序算法的展示集合，而是一个能够自主选择评测工具、观察实验结果、调整诊断路径并给出证据化结论的**搜索评测 Agent**。
+最终产品不是一个搜索页面，也不是若干排序算法的展示集合，而是一个能够自主寻找
+Bad Case、提出受控优化策略、运行评测、比较实验结果，并把证据化建议交给人类
+审批的**搜索评测与优化 Agent**。
 
 用户可以提出如下任务：
 
@@ -19,6 +21,7 @@
 BM25 和 Hybrid 哪个更适合型号 Query？
 这次字段权重调整是否值得上线？
 找出本次实验退化最严重的 Query，并给出下一步实验。
+自己搜索当前结果，找出 Bad Case，并提出一个可验证的策略更新。
 ```
 
 Agent 必须完成：
@@ -27,13 +30,16 @@ Agent 必须完成：
 2. 根据任务选择工具，而不是执行写死的固定流程。
 3. 观察工具结果，并据此决定继续、改道或停止。
 4. 比较 Run、指标、延迟和具体排名变化。
-5. 输出可执行建议，并引用 Query、Run ID、指标或 Trace 作为证据。
-6. 在标签不足、工具失败或证据冲突时明确表示无法确认。
+5. 主动构思一个受控候选策略，运行 Harness 验证，而不是只给口头建议。
+6. 用面板展示希望增加的策略、样本前后对比、总体效果、局部退化和证据。
+7. 等待人类点击更新或拒绝；批准后自动写入版本化策略配置并触发后续验证。
+8. 在标签不足、工具失败或证据冲突时明确表示无法确认。
 
 证明“这是 Agent”的最低标准：
 
 - 下一次工具调用由前一次观察结果决定。
 - 同一任务在不同工具结果下可以走不同分支。
+- Agent 能自己发现 Bad Case 并选择一个受控候选优化，而不是等人指定两个 Run。
 - Agent 能在预算内停止，并能处理至少一种工具失败。
 - 最终结论不是语言模型猜测，每个关键判断都有实验引用。
 
@@ -44,7 +50,7 @@ Agent Evaluation Harness             给 Agent 出题并判定任务是否完成
               ↓
 Agent Runtime Harness                控制循环、工具、权限、预算、Trace
               ↓
-Search Evaluation Agent              计划 → 行动 → 观察 → 决策 → 报告
+Search Evaluation Agent              找 Bad Case → 提策略 → 跑实验 → 比较 → 等审批
               ↓
 Search Evaluation Harness            运行 Ranker、计算指标、保存 Run
               ↓
@@ -111,8 +117,8 @@ Owner 决定先在现有 `shawspace.cn` 搜索体验页搜索全部 1,814,924 �
 | 4. Agent Runtime Harness | 状态机、权限、预算、Trace、Replay | Agent 可控、可恢复、可复现 | **In Progress: local scaffold only** |
 | 5. Agent Evaluation Harness | 黄金任务集和 Agent 成绩单 | 证明 Agent 不是偶然成功 | **Not Started** |
 | 6. 搜索策略与诊断实验室 | Multi-field BM25、Vector、Hybrid、Rerank、Bad Case | Agent 获得更多可组合实验工具 | **Not Started** |
-| 7. 诊断与优化 Agent | 自动提出假设、运行受控实验并给出决策 | 完整的搜索评测 Agent | **Not Started** |
-| 8. Web Agent 工作台与交付 | Agent 工作台、搜索对比页、部署与作品集 | 用户可观察计划、工具、证据和 Replay | **Not Started** |
+| 7. 诊断与优化 Agent | 自动发现 Bad Case、提出策略、运行受控实验并请求审批 | 完整的搜索评测与优化 Agent | **Not Started** |
+| 8. Web Agent 工作台与交付 | Agent 工作台、审批面板、搜索对比页、部署与作品集 | 用户可观察计划、工具、证据、Replay 和策略审批 | **Not Started** |
 
 与 v0.1 相比，Agent MVP 从原阶段 5 前移到阶段 3；Trace、Replay 和 Agent Eval 也前移。向量与 Rerank 不再是 Agent 出现之前的前置条件。
 
@@ -315,18 +321,20 @@ Agent 指标：
 
 ### 阶段 7：诊断与优化 Agent
 
-目标：让 Agent 完成完整的搜索评测任务，而不是只解释一份已有报告。
+目标：让 Agent 完成完整的搜索评测和受控优化任务，而不是只解释一份已有报告。
 
 完整循环：
 
 ```text
-发现问题
+自己搜索或抽样发现问题
 → 定位 Query 分群和 Bad Case
-→ 提出可证伪假设
-→ 选择受控实验
+→ 提出可证伪优化假设
+→ 选择受控策略实验
 → 运行并比较 Run
-→ 检查总体提升与局部退化
-→ 建议接受、拒绝或继续实验
+→ 检查总体提升、局部退化、延迟和成本
+→ 生成审批面板
+→ 人类点击更新或拒绝
+→ 批准后自动写入版本化策略配置并触发验证
 ```
 
 Agent 可以：
@@ -335,19 +343,22 @@ Agent 可以：
 - 创建隔离实验 Run。
 - 比较质量、延迟和成本。
 - 给出需要人工审批的配置建议。
+- 在批准后自动应用版本化策略配置，并启动后续 validation。
 
 Agent 不可以：
 
 - 修改 frozen test、相关性标签或历史 Run。
 - 任意执行代码或访问未授权数据。
-- 自动部署、修改线上索引或跳过人工审批。
+- 在没有人工点击批准前修改活跃策略、部署线上索引或跳过审批。
 - 用无法追溯的常识替代实验结果。
 
 验收：
 
 - 从自然语言任务到证据报告能够端到端完成。
+- Agent 能主动发现至少一个 Bad Case，并提出一个受控候选策略。
 - 至少一个任务包含假设失败后的改道。
 - 最终建议同时考虑总体指标、Query 分群、延迟和成本。
+- 审批面板展示策略、样本前后结果、效果变化、局部风险和证据引用。
 - Agent Evaluation Harness 能稳定复现成功与失败结论。
 
 ### 阶段 8：Web Agent 工作台与作品集交付
@@ -355,17 +366,21 @@ Agent 不可以：
 页面分为两类，避免把搜索 Demo 当成 Agent：
 
 1. **搜索对比页**：只保留优化前/后的搜索框和结果，供用户感受差异。
-2. **Agent 工作台**：输入诊断任务，展示计划、工具调用、观察、Run 对比和最终建议。
+2. **Agent 工作台**：输入诊断或优化任务，展示计划、工具调用、观察、Run 对比和最终建议。
 3. **实验页**：查看指标、延迟、排名 Diff 和 Query 分群。
 4. **Trace / Replay 页**：检查历史 Agent 路径和失败位置。
 5. **批量评测页**：运行 Search Harness 或 Agent Eval Harness。
+6. **策略审批面板**：展示 Agent 希望增加的策略、样本前后结果、效果变化、
+   局部退化和证据，提供更新策略、拒绝策略和继续实验按钮。
 
 验收：
 
 - 用户无需命令行即可完成一次 Agent 诊断。
+- 用户只需要审批策略取舍，不需要手动跑每个实验。
 - 页面展示的指标与离线 Run 完全一致。
 - 三分钟演示中能看见 Agent 根据工具结果改变下一步行动。
 - 任一结论都能打开对应 Run、Query 或 Trace。
+- 点击更新策略后，系统自动写入版本化策略配置并触发后续验证。
 - README、架构图、评测报告、演示脚本和部署说明齐全。
 
 ## 6. Now / Next / Later
@@ -382,13 +397,15 @@ Agent 不可以：
 
 - 建立至少 10 个固定 Agent 任务和 Agent Eval 判定，区分 Runtime 正确与
   Planner 任务完成质量。
+- 增加 StrategyProposal artifact：Agent 主动发现 bad case、提出候选策略、
+  调 Harness 比较，并生成待审批结果。
 - 接入第一个真实模型 Planner，但继续使用相同 Tool Schema、权限和证据约束。
 - 在接入任何网络/模型工具前加入可强制终止的 worker deadline。
 
 ### Later
 
 - Multi-field BM25、Vector、Hybrid、Rerank。
-- Bad Case 黄金集和自动实验 Agent。
+- Bad Case 黄金集、自动实验 Agent 和策略审批面板。
 - Web Agent 工作台、部署和作品集交付。
 
 ## 7. 关键学习路线
@@ -402,7 +419,7 @@ Agent 不可以：
 | 5 | Agent 任务成功率、裁判可靠性和 Eval 污染 |
 | 6 | Multi-field BM25、向量、RRF、Rerank、召回与精排 |
 | 7 | 假设驱动实验、局部退化、自动化与人工审批边界 |
-| 8 | API/前端边界、异步任务和三分钟证据化讲解 |
+| 8 | API/前端边界、异步任务、策略审批和三分钟证据化讲解 |
 
 完成状态记录在 `docs/LEARNING_CHECKPOINTS.md`。不要求 Owner 手写所有工程代码，但必须能解释会影响产品和实验判断的概念。
 
@@ -416,15 +433,15 @@ Agent 不可以：
 - Agent Runtime Harness、Trace、Replay。
 - Agent Evaluation Harness 和固定任务集。
 - BM25、Vector、Hybrid、Rerank 对比。
-- 诊断与受控实验 Agent。
-- 能展示 Agent 行为的 Web 工作台。
+- 主动 Bad Case 发现、策略提案、Harness 比较和人工审批后的自动更新。
+- 能展示 Agent 行为和策略审批的 Web 工作台。
 
 ### Should Have
 
 - 封闭语料检索评测。
 - Query 分群、Bad Case 黄金集和回归门禁。
 - 延迟、成本和稳定性指标。
-- 人工审批后的实验配置提案。
+- 人工审批后的实验配置提案与自动应用。
 
 ### Could Have
 
@@ -438,7 +455,7 @@ Agent 不可以：
 - 抓取 Amazon、淘宝、TikTok Shop 等商城网页。
 - 声称复现或优化了 Amazon 线上搜索。
 - 个性化、广告排序和推荐系统。
-- 自动修改生产搜索配置或自动部署。
+- 未经人工审批自动修改生产搜索配置或自动部署。
 - 训练大型模型或让 Agent 任意执行 Shell/Python。
 
 ## 9. 风险与门禁

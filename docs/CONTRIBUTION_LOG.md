@@ -49,6 +49,7 @@
 | D-016 | 在 dev 解锁前先实现 smoke-only、确定性的 Agent Runtime 垂直切片：四个白名单领域工具、受信 Run registry、基于观察分支的 Fake planner、有限状态/预算、Trace 与离线 Replay；真实模型和通用插件系统后置 | Owner 要求项目最终必须体现 Agent，并在 Codex 解释实施顺序后回复“可以”“继续” | **Codex 提出具体 Runtime 架构、安全边界和分阶段实现** | Owner 批准继续建设 Agent 方向；这不是 Owner 独立设计 Runtime 细节。当前受限脚手架已通过本地验收，但完整 Agent 阶段仍未完成 | Codex 实现代码、测试、日志和文档；外部语义/安全复审发现的问题由 Codex 修复；277 项测试、Ruff 与仓库策略检查通过 | Codex-proposed/implemented; Owner-approved direction |
 | D-017 | 关键知识仍须随开发及时解释，但不再用问答或测验中断执行；未取得独立理解证据时不把学习状态标为完成，也不解锁 500-Query dev | **Owner 主动提出**：“不要问答了。继续” | Owner 定义协作节奏；Codex 将其落实为“进度内讲解 + 保持门禁” | **Owner** | Codex 更新项目协作指令与学习记录；Stage 1/2 学习状态仍为 pending | Owner-originated workflow decision + Codex operationalization |
 | D-018 | 为当前 Agent Runtime 增加视觉化流程说明，帮助 Owner 区分搜索系统、搜索评测和 Agent 控制闭环 | **Owner 主动提出**：“把agent可视化，我不太懂目前的流程” | **Codex 提出文档落点和流程图结构** | Owner 提出学习需求；Codex 在不解锁 dev、不改变搜索结果的边界内执行 | Codex 新增 `docs/AGENT_FLOW.md`，并从 README、Runtime guide、Roadmap 链接；该文档是学习与讲解材料，不是代码能力声明 | Owner-originated learning/product communication need + Codex documentation implementation |
+| D-019 | 最终 Agent 不能只是被动比较两个 Run；它必须主动搜索/抽样发现 Bad Case、提出候选优化、调用 Harness 比较，并通过审批面板让人点击更新或拒绝；批准后系统自动应用版本化策略并验证 | **Owner 主动提出并纠偏**：“你去判断或者构思或者自己去实际搜索，看看badcase，然后提出优化。然后用harness比较……人只需要点更新策略，或者拒绝策略” | Owner 定义目标产品行为；Codex 将其整理为 approval-gated optimization workflow 和阶段交付 | **Owner** 定义方向与审批交互；Codex 负责具体架构拆解和后续实现 | Codex 新增 `docs/AGENT_OPTIMIZATION_WORKFLOW.md`，更新 `ROADMAP.md`、`AGENT_FLOW.md`、README 与学习记录；当前是方向与规格更新，尚未完成代码实现 | Owner-originated product decision + Codex specification implementation |
 
 ### 尚未拍板的提案
 
@@ -66,6 +67,8 @@
   不等于已经完成相应知识验证。
 - 要求把 Agent 当前流程视觉化，因为文字流程仍不够直观；这是学习与产品
   表达需求，不等于 Owner 已独立设计 Runtime 结构。
+- 将 Agent 产品方向从“被动比较 Run”纠偏为“主动发现 Bad Case、提出策略、
+  Harness 验证、人工审批后自动更新”的优化 Agent。
 - 定义作品集入口和搜索体验页的关键交互、信息取舍，并通过实际页面反馈推动修正。
 - 定义软件必须具备模块化日志、独立排障、脱敏、生产降噪和保留说明等质量要求。
 - 保留关键政策的最终拍板权；目前明确批准了 `esci-primary-v1` 相关性政策。
@@ -82,6 +85,8 @@
   防线与未来 Agent registry 边界。
 - 设计并实现 smoke-only Agent Runtime 脚手架：严格领域工具、观察驱动的
   确定性 Planner、状态/预算/权限、Trace/Replay、模块化日志与安全测试。
+- 将 Owner 的主动优化 Agent 方向拆成 strategy proposal、Harness comparison、
+  approval panel 和 versioned strategy update 的后续实施路线。
 - 运行自动测试、数据校验和 smoke 实验，并把证据写入报告和 Git commits。
 - 讲解搜索原理、提示关键知识，并维护学习检查点和本归因台账。
 

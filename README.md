@@ -4,6 +4,9 @@ An evidence-driven evaluation and diagnosis agent for e-commerce search ranking.
 The project uses Amazon Shopping Queries ESCI to compare BM25, vector retrieval,
 hybrid ranking, and Cross-Encoder reranking. Every conclusion must be traceable
 to a dataset version, run configuration, metric, and ranked product list.
+The intended product loop is approval-gated optimization: the Agent finds bad
+cases, proposes bounded strategy changes, runs the Harness, compares evidence,
+and shows a panel where a human accepts or rejects the strategy update.
 
 ## Project status
 
@@ -46,6 +49,7 @@ explicit pending integration check, not an implicit fallback or a claimed pass.
 - Full-catalog baseline decision: [docs/adr/002-full-catalog-baseline.md](docs/adr/002-full-catalog-baseline.md)
 - Agent Runtime guide: [docs/AGENT_RUNTIME.md](docs/AGENT_RUNTIME.md)
 - Agent flow visual guide: [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)
+- Agent optimization workflow: [docs/AGENT_OPTIMIZATION_WORKFLOW.md](docs/AGENT_OPTIMIZATION_WORKFLOW.md)
 - Agent Runtime decision: [docs/adr/003-agent-runtime-mvp.md](docs/adr/003-agent-runtime-mvp.md)
 - Required learning: [docs/LEARNING_CHECKPOINTS.md](docs/LEARNING_CHECKPOINTS.md)
 - Decision and contribution provenance: [docs/CONTRIBUTION_LOG.md](docs/CONTRIBUTION_LOG.md)

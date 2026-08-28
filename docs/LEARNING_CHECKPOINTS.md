@@ -71,6 +71,23 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
   Owner 要求不再以问答中断执行，因此不能把阅读该图记作掌握证据。
 - 状态：**Explanation delivered; independent verification pending**
 
+## 当前插入知识：优化 Agent 与人工审批边界
+
+【必学知识提醒】
+
+- 当前知识：Agent 可以自动发现 Bad Case、提出候选策略并跑 Harness，但不能
+  在没有人类批准时修改活跃搜索策略。
+- 为什么现在必须理解：这是产品可信度和安全边界。否则 Agent 可能把“平均
+  指标提升但局部退化”的策略自动上线，破坏用户体验。
+- 最低掌握范围：能区分三步：候选实验自动化、证据面板人工审批、批准后
+  自动写入版本化策略配置。
+- 具体例子：Agent 发现 `wireless mouse` 一类 Query 的品牌或属性匹配不好，
+  提出提高 `brand/title` 权重，Harness 显示 nDCG@10 提升但某些 Query
+  退化；面板必须把提升和退化都展示出来，由 Owner 点击更新或拒绝。
+- 验证证据：2026-08-28 已新增 `docs/AGENT_OPTIMIZATION_WORKFLOW.md`；这
+  是产品方向说明，不等于 Owner 已完成全部自动化边界学习验证。
+- 状态：**Explanation delivered; independent verification pending**
+
 ## 检查点记录
 
 完成一个检查点后，在这里追加简短记录：
