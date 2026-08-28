@@ -374,6 +374,8 @@ Agent 不可以：
 
 - 稳定 smoke-only Agent Runtime 脚手架的证据绑定、失败边界与 Replay。
 - 用固定 smoke Run 验证一次“比较 → 观察退化 → 下钻 Query → 终态”分支。
+- 用 `docs/AGENT_FLOW.md` 把任务、Planner、Runtime、工具、Trace 和 Replay
+  的关系视觉化，避免把搜索 Demo、Search Harness 和 Agent 控制层混在一起。
 - 关键知识随进度提供说明但不进行问答；500-Query dev 继续代码锁定。
 
 ### Next

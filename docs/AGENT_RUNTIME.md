@@ -5,6 +5,9 @@ Agent. It exercises control and evidence mechanics with a deterministic planner;
 it does not yet connect an LLM and is not the completed Agent promised by the
 roadmap.
 
+For a beginner-friendly picture of how the task, Planner, Runtime, tools, Trace
+and Replay relate to each other, see [AGENT_FLOW.md](AGENT_FLOW.md).
+
 ## What runs
 
 ```text

@@ -48,6 +48,7 @@
 | D-015 | 先在现有作品集网站提供全量 ESCI 商品的“优化前”搜索体验，再根据 Owner 实际体验做优化；优化后通道暂不开放 | **Owner 主动提出**：“打造一个基础的搜索系统，然后亚马逊提供的所有商品都能搜索，我去体验一下，然后再进行优化”；并明确“载体是我的那个网站” | Owner 定义产品顺序与载体；**Codex 提出 SQLite FTS5、字段权重、只读 API 和部署方案** | **Owner 决定体验优先级和网站载体**；具体搜索架构没有冒充 Owner 原创 | Codex 实现全量索引构建器、搜索服务、API、网站接入、结构化诊断、测试和 ADR，并部署、验证 1,814,924 商品生产索引；Owner 授权部署但仍负责接下来的体验与 Bad Case 判断 | Owner-originated product decision + Codex technical design/implementation |
 | D-016 | 在 dev 解锁前先实现 smoke-only、确定性的 Agent Runtime 垂直切片：四个白名单领域工具、受信 Run registry、基于观察分支的 Fake planner、有限状态/预算、Trace 与离线 Replay；真实模型和通用插件系统后置 | Owner 要求项目最终必须体现 Agent，并在 Codex 解释实施顺序后回复“可以”“继续” | **Codex 提出具体 Runtime 架构、安全边界和分阶段实现** | Owner 批准继续建设 Agent 方向；这不是 Owner 独立设计 Runtime 细节。当前受限脚手架已通过本地验收，但完整 Agent 阶段仍未完成 | Codex 实现代码、测试、日志和文档；外部语义/安全复审发现的问题由 Codex 修复；277 项测试、Ruff 与仓库策略检查通过 | Codex-proposed/implemented; Owner-approved direction |
 | D-017 | 关键知识仍须随开发及时解释，但不再用问答或测验中断执行；未取得独立理解证据时不把学习状态标为完成，也不解锁 500-Query dev | **Owner 主动提出**：“不要问答了。继续” | Owner 定义协作节奏；Codex 将其落实为“进度内讲解 + 保持门禁” | **Owner** | Codex 更新项目协作指令与学习记录；Stage 1/2 学习状态仍为 pending | Owner-originated workflow decision + Codex operationalization |
+| D-018 | 为当前 Agent Runtime 增加视觉化流程说明，帮助 Owner 区分搜索系统、搜索评测和 Agent 控制闭环 | **Owner 主动提出**：“把agent可视化，我不太懂目前的流程” | **Codex 提出文档落点和流程图结构** | Owner 提出学习需求；Codex 在不解锁 dev、不改变搜索结果的边界内执行 | Codex 新增 `docs/AGENT_FLOW.md`，并从 README、Runtime guide、Roadmap 链接；该文档是学习与讲解材料，不是代码能力声明 | Owner-originated learning/product communication need + Codex documentation implementation |
 
 ### 尚未拍板的提案
 
@@ -63,6 +64,8 @@
 - 定义学习与协作方式：关键知识必须本人掌握，要亲手走一遍搜索系统，Codex 提供代码和反馈。
 - 决定关键知识改为随进度直接讲解，不再用问答/测验中断执行；该流程决定
   不等于已经完成相应知识验证。
+- 要求把 Agent 当前流程视觉化，因为文字流程仍不够直观；这是学习与产品
+  表达需求，不等于 Owner 已独立设计 Runtime 结构。
 - 定义作品集入口和搜索体验页的关键交互、信息取舍，并通过实际页面反馈推动修正。
 - 定义软件必须具备模块化日志、独立排障、脱敏、生产降噪和保留说明等质量要求。
 - 保留关键政策的最终拍板权；目前明确批准了 `esci-primary-v1` 相关性政策。

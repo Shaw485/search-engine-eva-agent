@@ -45,6 +45,7 @@ explicit pending integration check, not an implicit fallback or a claimed pass.
 - Backend decision: [docs/adr/001-search-backend.md](docs/adr/001-search-backend.md)
 - Full-catalog baseline decision: [docs/adr/002-full-catalog-baseline.md](docs/adr/002-full-catalog-baseline.md)
 - Agent Runtime guide: [docs/AGENT_RUNTIME.md](docs/AGENT_RUNTIME.md)
+- Agent flow visual guide: [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)
 - Agent Runtime decision: [docs/adr/003-agent-runtime-mvp.md](docs/adr/003-agent-runtime-mvp.md)
 - Required learning: [docs/LEARNING_CHECKPOINTS.md](docs/LEARNING_CHECKPOINTS.md)
 - Decision and contribution provenance: [docs/CONTRIBUTION_LOG.md](docs/CONTRIBUTION_LOG.md)

@@ -54,6 +54,23 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
   形式打断执行，因此不能把阅读或“继续”记作掌握证据。
 - 状态：**Explanation delivered; independent verification pending**
 
+## 当前插入知识：Agent 的观察后分支
+
+【必学知识提醒】
+
+- 当前知识：Agent 不是一次性答案生成器，也不是固定脚本；它必须根据工具
+  观察结果决定下一步。
+- 为什么现在必须理解：否则会把当前 deterministic scaffold 误认为完整 LLM
+  Agent，或把固定流程误认为 Agent 能力。
+- 最低掌握范围：能看懂 `任务 -> Planner -> Runtime -> 工具 -> Observation
+  -> 再决策 -> 终态报告` 这个闭环；能指出一次分支条件。
+- 具体例子：如果 `compare_runs` 发现候选 Run 有 Query 退化，当前 Planner
+  会继续调用 `inspect_query` 下钻最严重的退化 Query；如果整体提升且没有
+  退化，它可以直接 `accept`。
+- 验证证据：2026-08-28 已新增 `docs/AGENT_FLOW.md` 作为视觉化学习地图；
+  Owner 要求不再以问答中断执行，因此不能把阅读该图记作掌握证据。
+- 状态：**Explanation delivered; independent verification pending**
+
 ## 检查点记录
 
 完成一个检查点后，在这里追加简短记录：
