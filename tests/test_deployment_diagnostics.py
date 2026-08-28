@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
+
+
+def _nginx_location(config: str, location: str) -> str:
+    pattern = rf"location\s+{re.escape(location)}\s*\{{(?P<body>.*?)\n\}}"
+    match = re.search(pattern, config, flags=re.DOTALL)
+    assert match is not None, f"missing nginx location: {location}"
+    return match.group("body")
 
 
 def test_all_documented_uvicorn_entry_points_disable_access_logs() -> None:
@@ -16,9 +24,30 @@ def test_all_documented_uvicorn_entry_points_disable_access_logs() -> None:
 
 def test_proxy_disables_request_line_access_log() -> None:
     nginx = (ROOT / "deploy/nginx-search-eval.conf").read_text(encoding="utf-8")
-    assert "access_log off;" in nginx
-    assert "location = /search-eval-api/agent/strategy/decision" in nginx
-    assert "return 404;" in nginx
+    decision = _nginx_location(nginx, "= /search-eval-api/agent/strategy/decision")
+    public_api = _nginx_location(nginx, "/search-eval-api/")
+    assert "access_log off;" in public_api
+    assert "auth_basic off;" in public_api
+    assert "auth_basic_user_file" not in public_api
+    assert "auth_basic off;" in decision
+    assert "return 404;" in decision
+    assert "proxy_pass" not in decision
+
+
+def test_only_agent_page_and_proposal_endpoint_require_basic_auth() -> None:
+    nginx = (ROOT / "deploy/nginx-search-eval.conf").read_text(encoding="utf-8")
+    agent_page = _nginx_location(nginx, "= /search-agent.html")
+    proposal = _nginx_location(nginx, "= /search-eval-api/agent/strategy/propose")
+
+    assert 'auth_basic "Search Agent";' in agent_page
+    assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in agent_page
+    assert 'add_header Cache-Control "no-store" always;' in agent_page
+    assert "try_files $uri =404;" in agent_page
+
+    assert 'auth_basic "Search Agent";' in proposal
+    assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in proposal
+    assert "proxy_pass http://127.0.0.1:8010/agent/strategy/propose;" in proposal
+    assert 'proxy_set_header Authorization "";' in proposal
 
 
 def test_catalog_artifact_is_read_only_and_configured_for_service_user() -> None:

@@ -66,10 +66,23 @@ sudo cp /var/www/search-engine-eva-agent/deploy/search-engine-eva-agent.service 
 sudo systemctl daemon-reload
 ```
 
-Add both location blocks from `deploy/nginx-search-eval.conf` inside the
-existing HTTPS server block, then run `sudo nginx -t` before
-`sudo systemctl reload nginx`. The exact decision location deliberately returns
-404 publicly; human decisions are owner-only and must use the loopback API.
+Add all location blocks from `deploy/nginx-search-eval.conf` inside the existing
+HTTPS server block. Before reloading Nginx, create the server-only credential
+file interactively; never put the password or generated hash in Git:
+
+```bash
+sudo htpasswd -cB /etc/nginx/.search-agent.htpasswd shaw
+sudo chown root:www-data /etc/nginx/.search-agent.htpasswd
+sudo chmod 0640 /etc/nginx/.search-agent.htpasswd
+sudo -u www-data test -r /etc/nginx/.search-agent.htpasswd
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Only `/search-agent.html` and the proposal endpoint require this credential.
+The search experience, strategy page, catalog search and approved strategy
+catalog stay public. The exact decision location deliberately returns 404 even
+with credentials; human decisions are owner-only and must use the loopback API.
 
 ## Install or replace the index
 
@@ -113,7 +126,14 @@ curl http://127.0.0.1:8010/health
 curl --request POST 'https://shawspace.cn/search-eval-api/catalog/search' \
   --header 'Content-Type: application/json' \
   --data '{"query":"wireless mouse","top_k":3}'
-curl --request POST 'https://shawspace.cn/search-eval-api/agent/strategy/propose' \
+curl --output /dev/null --write-out '%{http_code}\n' \
+  'https://shawspace.cn/search-agent.html'
+curl --output /dev/null --write-out '%{http_code}\n' \
+  --request POST 'https://shawspace.cn/search-eval-api/agent/strategy/propose' \
+  --header 'Content-Type: application/json' \
+  --data '{"profile":"smoke"}'
+curl --user shaw --request POST \
+  'https://shawspace.cn/search-eval-api/agent/strategy/propose' \
   --header 'Content-Type: application/json' \
   --data '{"profile":"smoke"}'
 curl 'https://shawspace.cn/search-eval-api/agent/strategy/catalog'
@@ -130,9 +150,10 @@ Acceptance requires:
 
 1. Health reports `catalog.status=ready`, the expected index ID and 1,814,924 products.
 2. English, Spanish, Japanese and exact product-ID checks return valid JSON.
-3. The Agent strategy proposal endpoint returns a pending proposal with baseline
-   Run ID, candidate Run ID, comparison ID, aggregate metric deltas and bad-case
-   examples.
+3. Anonymous requests to the Agent page and proposal endpoint return `401`;
+   authenticated proposal requests return a pending proposal with baseline Run
+   ID, candidate Run ID, comparison ID, aggregate metric deltas and bad-case
+   examples. Search and strategy pages remain anonymously accessible.
 4. The strategy catalog endpoint returns the current approved runtime strategy
    list. It can be empty before the Owner approves a proposal.
 5. The public decision check returns `404`; only a deliberate loopback request
