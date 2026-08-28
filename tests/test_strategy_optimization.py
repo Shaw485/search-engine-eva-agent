@@ -70,6 +70,19 @@ def test_agent_generates_real_strategy_proposal_artifacts(tmp_path: Path) -> Non
     assert proposal["strategy"]["strategy_id"] == "candidate-title-bm25-exact-boost-v1"
     assert proposal["evidence"]["aggregate_metrics"]["ndcg@10"]["delta"] > 0
     assert proposal["evidence"]["bad_cases"]
+    query_comparisons = proposal["evidence"]["query_comparisons"]
+    assert len(query_comparisons) == 10
+    assert [abs(item["ndcg@10_delta"]) for item in query_comparisons] == sorted(
+        (abs(item["ndcg@10_delta"]) for item in query_comparisons),
+        reverse=True,
+    )
+    assert all(len(item["top_baseline"]) == 10 for item in query_comparisons)
+    assert all(len(item["top_candidate"]) == 10 for item in query_comparisons)
+    assert all(
+        result["title"]
+        for item in query_comparisons
+        for result in item["top_baseline"] + item["top_candidate"]
+    )
     assert (
         project / "runs" / "strategy-proposals" / f"{proposal['proposal_id']}.json"
     ).is_file()
@@ -300,3 +313,4 @@ def test_strategy_optimizer_logs_without_query_text(tmp_path: Path) -> None:
         "strategy_proposal_completed",
     ]
     assert all(event["trace_id"] == "strategy-trace" for event in events)
+    assert events[-1]["query_comparison_count"] == 10

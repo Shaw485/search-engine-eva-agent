@@ -10,6 +10,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
+import polars as pl
+
 from search_quality.evaluation.artifacts import (
     atomic_write_text,
     require_clean_code_revision,
@@ -36,6 +38,8 @@ BASELINE_RANKER = "title-bm25"
 CANDIDATE_RANKER = "title-bm25-exact-boost"
 PROPOSAL_ID_PATTERN = re.compile(r"proposal-[0-9a-f]{12}\Z")
 STRATEGY_CATALOG_SCHEMA_VERSION = "search-strategy-catalog-v1"
+QUERY_COMPARISON_LIMIT = 10
+QUERY_RESULT_LIMIT = 10
 
 
 def load_strategy_catalog(
@@ -124,6 +128,7 @@ def generate_strategy_proposal(
         project_root=root,
         manifest_path=manifest_path,
     )
+    product_titles = _load_product_titles(profile.path)
 
     run_store.mkdir(parents=True, exist_ok=True)
     comparison_store.mkdir(parents=True, exist_ok=True)
@@ -138,6 +143,7 @@ def generate_strategy_proposal(
         baseline=baseline,
         candidate=candidate,
         comparison=comparison,
+        product_titles=product_titles,
         profile_id=profile_id,
     )
     proposal_id = _proposal_id(proposal_body)
@@ -159,6 +165,7 @@ def generate_strategy_proposal(
             "comparison_id": comparison["comparison_id"],
             "profile_id": profile_id,
             "proposal_id": proposal_id,
+            "query_comparison_count": len(proposal["evidence"]["query_comparisons"]),
         },
     )
     return proposal
@@ -226,6 +233,7 @@ def _build_proposal_body(
     baseline: dict[str, Any],
     candidate: dict[str, Any],
     comparison: dict[str, Any],
+    product_titles: dict[tuple[str, str], str],
     profile_id: str,
 ) -> dict[str, Any]:
     primary_delta = comparison["aggregate_metrics"]["ndcg@10"]["delta"]
@@ -255,6 +263,11 @@ def _build_proposal_body(
             "bad_cases": _baseline_bad_cases(baseline, candidate),
             "improvements": improvements,
             "outcome_counts": comparison["outcome_counts"],
+            "query_comparisons": _query_comparisons(
+                baseline,
+                candidate,
+                product_titles=product_titles,
+            ),
             "regressions": regressions,
         },
         "profile": profile_id,
@@ -309,6 +322,89 @@ def _top_products(query: dict[str, Any]) -> list[dict[str, Any]]:
             "score": item["score"],
         }
         for item in query["ranking"][:3]
+    ]
+
+
+def _load_product_titles(path: Path) -> dict[tuple[str, str], str]:
+    frame = pl.read_parquet(
+        path,
+        columns=["product_locale", "product_id", "product_title"],
+    ).unique(subset=["product_locale", "product_id"], maintain_order=True)
+    return {
+        (str(row["product_locale"]), str(row["product_id"])): str(row["product_title"])
+        for row in frame.iter_rows(named=True)
+    }
+
+
+def _query_comparisons(
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+    *,
+    product_titles: dict[tuple[str, str], str],
+) -> list[dict[str, Any]]:
+    candidate_by_query = {
+        int(item["query_id"]): item for item in candidate["per_query"]
+    }
+    comparisons: list[dict[str, Any]] = []
+    for baseline_query in baseline["per_query"]:
+        query_id = int(baseline_query["query_id"])
+        candidate_query = candidate_by_query[query_id]
+        baseline_ndcg = float(baseline_query["metrics"]["ndcg@10"])
+        candidate_ndcg = float(candidate_query["metrics"]["ndcg@10"])
+        delta = candidate_ndcg - baseline_ndcg
+        outcome = (
+            "improvement"
+            if delta > COMPARISON_EPSILON
+            else "regression"
+            if delta < -COMPARISON_EPSILON
+            else "unchanged"
+        )
+        comparisons.append(
+            {
+                "baseline_ndcg@10": baseline_ndcg,
+                "candidate_count": int(baseline_query["candidate_count"]),
+                "candidate_ndcg@10": candidate_ndcg,
+                "locale": str(baseline_query["locale"]),
+                "ndcg@10_delta": delta,
+                "outcome": outcome,
+                "query_id": query_id,
+                "query_text": str(baseline_query["query_text"]),
+                "top_baseline": _display_results(
+                    baseline_query,
+                    product_titles=product_titles,
+                ),
+                "top_candidate": _display_results(
+                    candidate_query,
+                    product_titles=product_titles,
+                ),
+            }
+        )
+    comparisons.sort(
+        key=lambda item: (
+            -abs(item["ndcg@10_delta"]),
+            item["baseline_ndcg@10"],
+            item["query_id"],
+        )
+    )
+    return comparisons[:QUERY_COMPARISON_LIMIT]
+
+
+def _display_results(
+    query: dict[str, Any],
+    *,
+    product_titles: dict[tuple[str, str], str],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "gain": item["gain"],
+            "label": item["label"],
+            "locale": item["locale"],
+            "product_id": item["product_id"],
+            "rank": item["rank"],
+            "score": item["score"],
+            "title": product_titles[(item["locale"], item["product_id"])],
+        }
+        for item in query["ranking"][:QUERY_RESULT_LIMIT]
     ]
 
 
