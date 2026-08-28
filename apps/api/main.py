@@ -467,6 +467,7 @@ def agent_strategy_decision(request: Request, payload: StrategyDecisionRequest) 
             artifact_root=_agent_artifact_root(),
             proposal_id=payload.proposal_id,
             decision=payload.decision,
+            revision_provider=_api_code_revision,
         )
         with _AGENT_PROPOSAL_LOCK:
             _AGENT_PROPOSAL_CACHE.clear()

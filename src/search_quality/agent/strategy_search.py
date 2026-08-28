@@ -279,7 +279,7 @@ class SelectionScoreBreakdown(StrictModel):
 
 class GateCheck(StrictModel):
     name: GateName
-    comparator: Literal[">=", "<="]
+    comparator: Literal[">", ">=", "<="]
     observed: FiniteFloat
     threshold: FiniteFloat
     passed: StrictBool
@@ -287,7 +287,9 @@ class GateCheck(StrictModel):
     @model_validator(mode="after")
     def validate_result(self) -> Self:
         expected = (
-            self.observed >= self.threshold
+            self.observed > self.threshold
+            if self.comparator == ">"
+            else self.observed >= self.threshold
             if self.comparator == ">="
             else self.observed <= self.threshold
         )
@@ -670,7 +672,7 @@ def score_strategy_comparison(
     checks = [
         _gate_check(
             "ndcg@10_minimum",
-            ">=",
+            ">",
             comparison.aggregate_metrics.ndcg_at_10.delta,
             policy.min_ndcg_at_10_delta,
         ),
@@ -804,14 +806,16 @@ def select_winner(evaluations: Sequence[StrategyEvaluation]) -> WinnerSelection:
 
 def _gate_check(
     name: GateName,
-    comparator: Literal[">=", "<="],
+    comparator: Literal[">", ">=", "<="],
     observed: float,
     threshold: float,
 ) -> GateCheck:
     observed_value = round(float(observed), 12)
     threshold_value = round(float(threshold), 12)
     passed = (
-        observed_value >= threshold_value
+        observed_value > threshold_value
+        if comparator == ">"
+        else observed_value >= threshold_value
         if comparator == ">="
         else observed_value <= threshold_value
     )

@@ -313,6 +313,25 @@ def test_custom_gate_policy_can_be_stric_without_changing_selection_score() -> N
     assert strict.eligible is False
 
 
+def test_ndcg_gate_requires_an_improvement_beyond_comparison_epsilon() -> None:
+    candidate = select_exact_boost_candidates(
+        [diagnose_bad_case(_bad_case())],
+        max_candidates=1,
+    ).candidates[0]
+
+    evaluation = score_strategy_comparison(
+        candidate,
+        _comparison(ndcg_delta=1e-12),
+    )
+
+    ndcg_gate = next(
+        check for check in evaluation.gates.checks if check.name == "ndcg@10_minimum"
+    )
+    assert ndcg_gate.comparator == ">"
+    assert ndcg_gate.passed is False
+    assert evaluation.eligible is False
+
+
 def test_winner_uses_selection_score_then_deterministic_tie_breaks() -> None:
     candidates = select_exact_boost_candidates(
         [diagnose_bad_case(_bad_case())],

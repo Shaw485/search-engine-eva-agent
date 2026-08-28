@@ -14,7 +14,9 @@ from starlette.requests import Request
 from apps.api import main as api
 from search_quality.agent import optimization
 from search_quality.agent.optimization import (
-    apply_strategy_decision,
+    apply_strategy_decision as _apply_strategy_decision,
+)
+from search_quality.agent.optimization import (
     generate_strategy_proposal,
     load_strategy_catalog,
 )
@@ -22,6 +24,12 @@ from search_quality.agent.strategy_search import CandidateSelection, GatePolicy
 from search_quality.observability import configure_logging, logging_context
 
 PROJECT_ROOT = Path(__file__).parents[1]
+TEST_CODE_REVISION = "a" * 40
+
+
+def apply_strategy_decision(**kwargs):
+    kwargs.setdefault("revision_provider", lambda _root: TEST_CODE_REVISION)
+    return _apply_strategy_decision(**kwargs)
 
 
 def _apply_decision_worker(
@@ -353,6 +361,28 @@ def test_unaddressable_diagnosis_returns_engineering_terminal_instead_of_error(
             proposal_id=proposal["proposal_id"],
             decision="approve",
         )
+
+
+def test_no_findings_terminal_does_not_invent_a_root_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _copy_smoke_project(tmp_path)
+    monkeypatch.setattr(
+        optimization, "_diagnose_baseline", lambda *_args, **_kwargs: []
+    )
+
+    proposal = generate_strategy_proposal(
+        project_root=project,
+        revision_provider=lambda _root: TEST_CODE_REVISION,
+    )
+
+    assert proposal["status"] == "terminal"
+    assert proposal["analysis"]["diagnosis_count"] == 0
+    assert not any(proposal["analysis"]["root_cause_counts"].values())
+    assert proposal["strategy"]["target_root_cause"] is None
+    assert (
+        "不能凭空选择策略方向" in proposal["strategy"]["explanation"]["target_problem"]
+    )
 
 
 def test_agent_artifacts_can_live_outside_read_only_project(tmp_path: Path) -> None:
@@ -712,6 +742,50 @@ def test_strategy_approval_rejects_tampered_proposal(tmp_path: Path) -> None:
         )
 
 
+def test_strategy_approval_rejects_evidence_from_an_old_code_revision(
+    tmp_path: Path,
+) -> None:
+    project = _copy_smoke_project(tmp_path)
+    proposal = generate_strategy_proposal(
+        project_root=project,
+        revision_provider=lambda _root: TEST_CODE_REVISION,
+    )
+
+    with pytest.raises(ValueError, match="current deployment"):
+        _apply_strategy_decision(
+            project_root=project,
+            proposal_id=proposal["proposal_id"],
+            decision="approve",
+            revision_provider=lambda _root: "b" * 40,
+        )
+
+    _assert_no_strategy_activation(project, proposal["proposal_id"])
+
+
+def test_strategy_approval_requires_the_complete_canonical_ranker_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _copy_smoke_project(tmp_path)
+    proposal = generate_strategy_proposal(
+        project_root=project,
+        revision_provider=lambda _root: TEST_CODE_REVISION,
+    )
+    monkeypatch.setattr(
+        optimization,
+        "_canonical_candidate_ranker_config",
+        lambda _candidate: {"ranker_id": "candidate-title-bm25-exact-boost-v1"},
+    )
+
+    with pytest.raises(ValueError, match="selected strategy config"):
+        apply_strategy_decision(
+            project_root=project,
+            proposal_id=proposal["proposal_id"],
+            decision="approve",
+        )
+
+    _assert_no_strategy_activation(project, proposal["proposal_id"])
+
+
 @pytest.mark.parametrize(
     ("run_id_field", "config_key", "tampered_value", "role"),
     [
@@ -852,11 +926,13 @@ def test_api_strategy_routes_return_contracts(monkeypatch: pytest.MonkeyPatch) -
         "generate_strategy_proposal",
         lambda **_kwargs: {"proposal_id": "proposal-aaaaaaaaaaaa"},
     )
-    monkeypatch.setattr(
-        api,
-        "apply_strategy_decision",
-        lambda **_kwargs: {"decision_id": "decision-bbbbbbbbbbbb"},
-    )
+    decision_calls: list[dict] = []
+
+    def decide(**kwargs):
+        decision_calls.append(kwargs)
+        return {"decision_id": "decision-bbbbbbbbbbbb"}
+
+    monkeypatch.setattr(api, "apply_strategy_decision", decide)
     monkeypatch.setattr(
         api,
         "load_strategy_catalog",
@@ -873,6 +949,7 @@ def test_api_strategy_routes_return_contracts(monkeypatch: pytest.MonkeyPatch) -
             decision="approve",
         ),
     ) == {"decision_id": "decision-bbbbbbbbbbbb"}
+    assert decision_calls[0]["revision_provider"] is api._api_code_revision
     assert api.agent_strategy_catalog() == {
         "schema_version": "search-strategy-catalog-v1"
     }

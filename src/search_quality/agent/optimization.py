@@ -62,6 +62,7 @@ DEFAULT_PROPOSAL_PROFILE = "smoke"
 BASELINE_RANKER = "title-bm25"
 CANDIDATE_RANKER = "title-bm25-exact-boost"
 PROPOSAL_ID_PATTERN = re.compile(r"proposal-[0-9a-f]{12}\Z")
+CODE_REVISION_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
 STRATEGY_CATALOG_SCHEMA_VERSION = "search-strategy-catalog-v1"
 QUERY_COMPARISON_LIMIT = 10
 QUERY_RESULT_LIMIT = 10
@@ -348,6 +349,7 @@ def apply_strategy_decision(
     artifact_root: str | Path | None = None,
     proposal_id: str,
     decision: Literal["approve", "reject"],
+    revision_provider: Callable[[Path], str] = require_clean_code_revision,
 ) -> dict[str, Any]:
     """Record a human decision and apply an approved strategy config."""
 
@@ -355,8 +357,14 @@ def apply_strategy_decision(
         raise ValueError("invalid proposal_id")
     root = Path(project_root).resolve(strict=True)
     run_store = _resolve_artifact_root(root, artifact_root)
+    expected_code_revision: str | None = None
+    if decision == "approve":
+        expected_code_revision = revision_provider(root).strip()
+        if not CODE_REVISION_PATTERN.fullmatch(expected_code_revision):
+            raise ValueError("approval code revision must be a full Git commit SHA")
     with _strategy_decision_lock(run_store):
         return _apply_strategy_decision_locked(
+            expected_code_revision=expected_code_revision,
             root=root,
             run_store=run_store,
             proposal_id=proposal_id,
@@ -366,6 +374,7 @@ def apply_strategy_decision(
 
 def _apply_strategy_decision_locked(
     *,
+    expected_code_revision: str | None,
     root: Path,
     run_store: Path,
     proposal_id: str,
@@ -398,6 +407,7 @@ def _apply_strategy_decision_locked(
             run_store,
             proposal,
             active_strategy=None if replaying_activation else active_strategy,
+            expected_code_revision=expected_code_revision,
         )
     decision_payload = _strategy_decision_payload(proposal, decision)
     is_replay = _prepare_strategy_decision_intent(
@@ -458,9 +468,16 @@ def _persist_terminal_proposal(
         "exact_phrase_displaced",
         "missing_title_signal",
     )
-    target_root_cause = max(
-        cause_order,
-        key=lambda cause: (root_cause_counts.get(cause, 0), -cause_order.index(cause)),
+    target_root_cause = (
+        max(
+            cause_order,
+            key=lambda cause: (
+                root_cause_counts.get(cause, 0),
+                -cause_order.index(cause),
+            ),
+        )
+        if root_cause_counts
+        else None
     )
     terminal_strategy = {
         "reason_code": reason_code,
@@ -531,7 +548,11 @@ def _persist_terminal_proposal(
                 "scoring_formula": "没有候选分数；当前策略空间不适用",
                 "stage": "工程候选池",
                 "support_count": len(diagnoses),
-                "target_problem": "标题词法信号不足，或所有可用候选与 active 相同",
+                "target_problem": (
+                    "标题词法信号不足，或所有可用候选与 active 相同"
+                    if target_root_cause is not None
+                    else "当前规则没有发现可验证根因，不能凭空选择策略方向"
+                ),
             },
             "hypothesis": "The next useful experiment requires another implemented strategy family.",
             "is_new_strategy": False,
@@ -1065,6 +1086,7 @@ def _validate_proposal_evidence(
     proposal: dict[str, Any],
     *,
     active_strategy: dict[str, Any] | None,
+    expected_code_revision: str | None,
 ) -> None:
     baseline_run_id = proposal.get("baseline_run_id")
     candidate_run_id = proposal.get("candidate_run_id")
@@ -1098,6 +1120,17 @@ def _validate_proposal_evidence(
     )
     if rebuilt_comparison != stored_comparison:
         raise ValueError("stored comparison does not match trusted Run evidence")
+    if expected_code_revision is None or any(
+        revision != expected_code_revision
+        for revision in (
+            baseline.get("code_revision"),
+            candidate.get("code_revision"),
+            comparator_revision,
+        )
+    ):
+        raise ValueError(
+            "proposal evidence code revision does not match the current deployment"
+        )
     if active_strategy is not None:
         _validate_baseline_matches_active_strategy(baseline, active_strategy)
     strategy = proposal.get("strategy")
@@ -1145,14 +1178,10 @@ def _validate_proposal_evidence(
     ):
         raise ValueError("selected evaluation does not match proposal evidence")
     candidate_ranker = candidate.get("ranker")
-    candidate_parameters = selected_evaluation.candidate.parameters.model_dump(
-        mode="python"
-    )
-    if not isinstance(candidate_ranker, dict) or any(
-        candidate_ranker.get(name) != value
-        for name, value in candidate_parameters.items()
+    if candidate_ranker != _canonical_candidate_ranker_config(
+        selected_evaluation.candidate
     ):
-        raise ValueError("selected strategy parameters do not match the candidate Run")
+        raise ValueError("selected strategy config does not match the candidate Run")
     if selected["catalog_entry"] != _strategy_catalog_entry(
         selected_evaluation.candidate
     ) or selected["explanation"] != _strategy_explanation(
@@ -1168,6 +1197,26 @@ def _validate_proposal_evidence(
     )
     if recomputed_evaluation != selected_evaluation:
         raise ValueError("selected evaluation does not match trusted Run evidence")
+
+
+def _canonical_candidate_ranker_config(
+    candidate: ExactBoostCandidate,
+) -> dict[str, Any]:
+    parameters = candidate.parameters
+    return {
+        "analyzer_id": "ascii-alnum-lower-v1",
+        "b": 0.75,
+        "coverage_boost": parameters.coverage_boost,
+        "field": "product_title",
+        "idf_scope": "per_query_judged_candidates",
+        "k1": 1.5,
+        "numeric_boost": parameters.numeric_boost,
+        "phrase_boost": parameters.phrase_boost,
+        "query_terms": "deduplicated",
+        "ranker_id": "candidate-title-bm25-exact-boost-v1",
+        "score": "title_bm25_plus_query_coverage_numeric_and_phrase_boosts",
+        "tie_break": "product_locale_product_id_ascending",
+    }
 
 
 def _strategy_active_entry(proposal: dict[str, Any]) -> dict[str, Any]:
