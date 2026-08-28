@@ -157,6 +157,16 @@ status and stable error codes. Raw Query text, product titles, labels, parameter
 payloads and ranked lists stay in evidence artifacts under local `runs/` or the
 configured production runtime directory, not in diagnostics.
 
+Every approved strategy also writes a bounded public-safe version snapshot to
+`search-strategies/catalog.json`. `/agent/strategy/catalog` exposes at most the
+latest 100 snapshots as `strategy_history` and derives the matching
+`strategy_activity_logs`. These records contain adoption time, strategy/config
+identifiers, the three aggregate metrics (`Success@5`, `MRR@10`, `nDCG@10`),
+explanation and approval evidence IDs. They deliberately omit per-Query
+comparisons, bad cases, ranked results, product content and credentials. The
+`strategy_catalog_loaded` diagnostic records only current ID and record counts,
+never snapshot bodies or configuration values.
+
 The API also emits `agent_strategy_proposal_cache_hit`,
 `agent_strategy_proposal_cache_miss`,
 `agent_strategy_proposal_parent_changed` and

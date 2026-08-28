@@ -142,6 +142,40 @@ def _write_active_strategy(project: Path, active: dict) -> Path:
     return active_path
 
 
+def test_legacy_catalog_is_exposed_as_history_without_sensitive_evidence(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    strategy_dir = project / "runs" / "search-strategies"
+    strategy_dir.mkdir(parents=True)
+    (strategy_dir / "catalog.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "search-strategy-catalog-v1",
+                "strategies": [
+                    {
+                        "comparison_id": "comparison-aaaaaaaaaaaa",
+                        "description": "Legacy approved strategy",
+                        "name": "Legacy strategy",
+                        "proposal_id": "proposal-aaaaaaaaaaaa",
+                        "stage": "多路召回",
+                        "strategy_id": "legacy-v1",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    catalog = load_strategy_catalog(project_root=project)
+
+    assert catalog["strategy_history"][0]["strategy_id"] == "legacy-v1"
+    assert catalog["strategy_history"][0]["config"] == {}
+    assert catalog["strategy_activity_logs"][0]["event_id"] == (
+        "activity-proposal-aaaaaaaaaaaa"
+    )
+
+
 def test_legacy_active_strategy_is_strictly_migrated_before_reuse(
     tmp_path: Path,
 ) -> None:
@@ -450,6 +484,30 @@ def test_strategy_decision_approve_updates_catalog_and_is_idempotent(
     assert [item["strategy_id"] for item in catalog["strategies"]] == [
         "exact-conservative-v1"
     ]
+    assert len(catalog["strategy_history"]) == 1
+    history = catalog["strategy_history"][0]
+    assert history["strategy_id"] == "exact-conservative-v1"
+    assert history["proposal_id"] == proposal["proposal_id"]
+    assert history["decision_id"] == decision["decision_id"]
+    assert history["config"] == proposal["strategy"]["config"]
+    assert set(history["metrics"]) == {"success@5", "mrr@10", "ndcg@10"}
+    assert history["adopted_at"].endswith("Z")
+    assert catalog["strategy_activity_logs"] == [
+        {
+            "decision_id": decision["decision_id"],
+            "event_id": f"activity-{decision['decision_id']}",
+            "event_type": "strategy_approved_and_activated",
+            "message": "站长批准策略，配置已写入运行目录并成为当时的生效版本。",
+            "occurred_at": history["adopted_at"],
+            "proposal_id": proposal["proposal_id"],
+            "strategy_id": "exact-conservative-v1",
+            "strategy_name": proposal["strategy"]["catalog_entry"]["name"],
+        }
+    ]
+    serialized_public_catalog = json.dumps(catalog, ensure_ascii=False).lower()
+    assert "query_comparisons" not in serialized_public_catalog
+    assert "bad_cases" not in serialized_public_catalog
+    assert "query_text" not in serialized_public_catalog
     assert decision["strategy_config_sha256"] == proposal["strategy"]["config_sha256"]
     with pytest.raises(ValueError, match="different decision"):
         apply_strategy_decision(
@@ -533,12 +591,14 @@ def test_strategy_decision_intent_prevents_conflict_and_recovers_before_activati
     original_write_catalog = optimization._write_strategy_catalog
     activation_failed = False
 
-    def fail_first_activation(run_store: Path, payload: dict) -> str:
+    def fail_first_activation(
+        run_store: Path, payload: dict, decision_payload: dict
+    ) -> str:
         nonlocal activation_failed
         if not activation_failed:
             activation_failed = True
             raise OSError("simulated activation failure")
-        return original_write_catalog(run_store, payload)
+        return original_write_catalog(run_store, payload, decision_payload)
 
     monkeypatch.setattr(
         optimization,

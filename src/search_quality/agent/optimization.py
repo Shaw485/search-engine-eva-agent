@@ -12,6 +12,7 @@ import time
 from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -63,7 +64,7 @@ BASELINE_RANKER = "title-bm25"
 CANDIDATE_RANKER = "title-bm25-exact-boost"
 PROPOSAL_ID_PATTERN = re.compile(r"proposal-[0-9a-f]{12}\Z")
 CODE_REVISION_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
-STRATEGY_CATALOG_SCHEMA_VERSION = "search-strategy-catalog-v1"
+STRATEGY_CATALOG_SCHEMA_VERSION = "search-strategy-catalog-v2"
 QUERY_COMPARISON_LIMIT = 10
 QUERY_RESULT_LIMIT = 10
 MAX_STRATEGY_CANDIDATES = 4
@@ -133,10 +134,14 @@ def load_strategy_catalog(
     active = _load_active_strategy(run_store, migrate_legacy=True)
     active_strategy = active.get("strategy", {}) if isinstance(active, dict) else {}
     active_revision = _sha256_payload(active) if active else None
+    history = _public_strategy_history(catalog)
+    activity_logs = _public_strategy_activity_logs(history)
     logger.info(
         "strategy_catalog_loaded",
         extra={
             "active_strategy_id": active_strategy.get("strategy_id"),
+            "activity_log_count": len(activity_logs),
+            "history_count": len(history),
             "strategy_count": len(catalog.get("strategies", [])),
         },
     )
@@ -147,6 +152,8 @@ def load_strategy_catalog(
         "schema_version": catalog.get(
             "schema_version", STRATEGY_CATALOG_SCHEMA_VERSION
         ),
+        "strategy_history": history,
+        "strategy_activity_logs": activity_logs,
         "strategies": catalog.get("strategies", []),
     }
 
@@ -424,7 +431,7 @@ def _apply_strategy_decision_locked(
         decision_payload,
     )
     if decision == "approve":
-        _write_strategy_catalog(run_store, proposal)
+        _write_strategy_catalog(run_store, proposal, decision_payload)
     atomic_write_text(
         _decision_pointer(run_store, proposal_id),
         json.dumps(decision_payload, ensure_ascii=False, indent=2, sort_keys=True)
@@ -1229,7 +1236,11 @@ def _strategy_active_entry(proposal: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _write_strategy_catalog(run_store: Path, proposal: dict[str, Any]) -> str:
+def _write_strategy_catalog(
+    run_store: Path,
+    proposal: dict[str, Any],
+    decision_payload: dict[str, Any],
+) -> str:
     strategy_dir = _strategy_dir(run_store)
     strategy_dir.mkdir(parents=True, exist_ok=True)
     strategy = proposal["strategy"]
@@ -1253,8 +1264,33 @@ def _write_strategy_catalog(run_store: Path, proposal: dict[str, Any]) -> str:
             "strategy_id": strategy_id,
         }
     )
+    history = list(catalog.get("strategy_history", []))
+    if not history:
+        history = [
+            {
+                **item,
+                "adopted_at": None,
+                "config": {},
+                "decision_id": None,
+                "explanation": {},
+                "metrics": {},
+                "release_gate_passed": None,
+                "strategy_config_sha256": None,
+            }
+            for item in catalog.get("strategies", [])
+            if isinstance(item, dict)
+        ]
+    decision_id = decision_payload["decision_id"]
+    if not any(item.get("decision_id") == decision_id for item in history):
+        history.append(
+            _strategy_history_snapshot(
+                proposal=proposal,
+                decision_payload=decision_payload,
+            )
+        )
     catalog = {
         "schema_version": STRATEGY_CATALOG_SCHEMA_VERSION,
+        "strategy_history": history,
         "strategies": strategies,
     }
     atomic_write_text(
@@ -1268,6 +1304,113 @@ def _write_strategy_catalog(run_store: Path, proposal: dict[str, Any]) -> str:
     )
     # Keep the response stable and avoid exposing the server filesystem path.
     return "runs/search-strategies/active.json"
+
+
+def _strategy_history_snapshot(
+    *,
+    proposal: dict[str, Any],
+    decision_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Create one immutable, public-safe record for an adopted strategy."""
+
+    strategy = proposal["strategy"]
+    evidence = proposal.get("evidence")
+    aggregate_metrics = evidence.get("aggregate_metrics", {}) if isinstance(
+        evidence, dict
+    ) else {}
+    release_gate = proposal.get("release_gate")
+    return {
+        **strategy["catalog_entry"],
+        "adopted_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "comparison_id": proposal.get("comparison_id"),
+        "config": strategy.get("config", {}),
+        "decision_id": decision_payload["decision_id"],
+        "explanation": strategy.get("explanation", {}),
+        "metrics": {
+            metric_id: aggregate_metrics[metric_id]
+            for metric_id in ("success@5", "mrr@10", "ndcg@10")
+            if metric_id in aggregate_metrics
+        },
+        "proposal_id": proposal["proposal_id"],
+        "release_gate_passed": (
+            release_gate.get("passed") if isinstance(release_gate, dict) else None
+        ),
+        "strategy_config_sha256": strategy["config_sha256"],
+        "strategy_id": strategy["strategy_id"],
+    }
+
+
+def _public_strategy_history(catalog: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return bounded strategy history without query- or result-level evidence."""
+
+    raw_history = catalog.get("strategy_history", [])
+    if not isinstance(raw_history, list):
+        raise ValueError("strategy catalog history must be a list")
+    if not raw_history:
+        legacy_strategies = catalog.get("strategies", [])
+        if not isinstance(legacy_strategies, list):
+            raise ValueError("strategy catalog entries must be a list")
+        raw_history = [
+            {
+                **item,
+                "adopted_at": None,
+                "config": {},
+                "decision_id": None,
+                "explanation": {},
+                "metrics": {},
+                "release_gate_passed": None,
+                "strategy_config_sha256": None,
+            }
+            for item in legacy_strategies
+            if isinstance(item, dict)
+        ]
+    history: list[dict[str, Any]] = []
+    for item in raw_history[-100:]:
+        if not isinstance(item, dict):
+            raise ValueError("strategy catalog history entry must be an object")
+        history.append(
+            {
+                key: item.get(key)
+                for key in (
+                    "adopted_at",
+                    "comparison_id",
+                    "config",
+                    "decision_id",
+                    "description",
+                    "explanation",
+                    "metrics",
+                    "name",
+                    "proposal_id",
+                    "release_gate_passed",
+                    "stage",
+                    "strategy_config_sha256",
+                    "strategy_id",
+                )
+            }
+        )
+    return list(reversed(history))
+
+
+def _public_strategy_activity_logs(
+    history: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Derive a compact lifecycle audit log from approved history snapshots."""
+
+    return [
+        {
+            "event_id": (
+                f"activity-{item.get('decision_id') or item.get('proposal_id') or item.get('strategy_id')}"
+            ),
+            "event_type": "strategy_approved_and_activated",
+            "message": "站长批准策略，配置已写入运行目录并成为当时的生效版本。",
+            "occurred_at": item.get("adopted_at"),
+            "proposal_id": item.get("proposal_id"),
+            "decision_id": item.get("decision_id"),
+            "strategy_id": item.get("strategy_id"),
+            "strategy_name": item.get("name"),
+        }
+        for item in history
+    ]
 
 
 def _resolve_artifact_root(
