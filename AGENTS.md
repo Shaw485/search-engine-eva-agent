@@ -14,9 +14,13 @@ critical concept:
 1. Identify the concept before implementation continues.
 2. Tell the user why it matters to the current deliverable.
 3. Define the minimum knowledge they need, without turning it into a long course.
-4. Give one small example, exercise, or check question.
-5. Confirm understanding when misunderstanding would invalidate the experiment
-   or product decision.
+4. Give one small concrete example in the normal progress update.
+5. Do not stop execution for quizzes or question-and-answer checks. The Owner
+   explicitly requested an uninterrupted, explanation-first workflow on
+   2026-08-28. If a misunderstanding would invalidate an experiment or product
+   decision, explain the boundary and keep the affected gate locked until the
+   Owner later supplies independent evidence; do not infer mastery from
+   acknowledgement or from permission to continue.
 
 Do not interrupt the user for routine syntax, generated boilerplate, package
 installation details, or implementation mechanics that do not affect their

@@ -167,7 +167,10 @@ def test_reconfiguration_does_not_duplicate_handlers() -> None:
 
 
 def test_module_override_parser_rejects_unknown_or_invalid_values() -> None:
-    assert parse_module_levels(["evaluation=DEBUG", "ranking=OFF"]) == {
+    assert parse_module_levels(
+        ["evaluation=DEBUG", "ranking=OFF", "agent_tools=INFO"]
+    ) == {
+        "agent_tools": "INFO",
         "evaluation": "DEBUG",
         "ranking": "OFF",
     }

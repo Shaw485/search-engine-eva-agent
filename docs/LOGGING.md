@@ -4,8 +4,9 @@ The project separates immutable experiment evidence from runtime diagnostics:
 
 - Stage manifests and Run JSON are the reproducible source of truth.
 - Logs explain one execution and may contain timing or failure information.
-- A random `trace_id` belongs only in logs; it never enters deterministic Run
-  identity or metric calculations.
+- A random `trace_id` correlates one execution. For the Agent it also names the
+  corresponding Trace snapshot; it never enters deterministic Run identity or
+  metric calculations.
 
 ## Modules and defaults
 
@@ -20,6 +21,11 @@ stderr. Normal CLI results remain on stdout.
 | `data` | Stage 1 validation and build lifecycle | `WARNING` |
 | `evaluation` | Baseline/Run comparison, validation and artifact storage | `WARNING` |
 | `ranking` | Per-Query Ranker diagnostics | `OFF` |
+| `agent_runtime` | State, policy, budget and terminal lifecycle | `WARNING` |
+| `agent_model` | Planner decision boundary; currently the deterministic fixture | `WARNING` |
+| `agent_tools` | Allowlisted tool call lifecycle and stable failures | `WARNING` |
+| `agent_trace` | Trace artifact publication | `WARNING` |
+| `agent_replay` | Offline Trace validation and Replay lifecycle | `WARNING` |
 
 The library default is `WARNING`. Verbose ranking events are opt-in because one
 event per Query becomes noisy on larger profiles.
@@ -35,6 +41,7 @@ export SEARCH_LOG_LEVEL=WARNING
 export SEARCH_LOG_LEVEL_EVALUATION=INFO
 export SEARCH_LOG_LEVEL_RANKING=DEBUG
 export SEARCH_LOG_LEVEL_CATALOG=INFO
+export SEARCH_LOG_LEVEL_AGENT_RUNTIME=DEBUG
 ```
 
 CLI entry points also accept repeatable module overrides. These examples keep
@@ -61,6 +68,18 @@ JSON diagnostics separate from the normal result:
 
 .venv/bin/python -m search_quality.catalog.cli \
   --log-module catalog=DEBUG 2>catalog-build.jsonl
+
+.venv/bin/python -m search_quality.agent.cli \
+  --baseline-run-id "$BASELINE_RUN_ID" \
+  --candidate-run-id "$CANDIDATE_RUN_ID" \
+  --log-module agent_runtime=DEBUG \
+  --log-module agent_tools=DEBUG \
+  2>agent-debug.jsonl
+
+.venv/bin/python -m search_quality.agent.replay_cli \
+  "$TRACE_ID" \
+  --log-module agent_replay=DEBUG \
+  2>agent-replay.jsonl
 ```
 
 To isolate one subsystem, set the global level to `OFF` and enable only that
@@ -109,6 +128,21 @@ ranking differences. `runs/` is Git-ignored; review artifacts before sharing,
 and never commit or upload a private/user-Query Run without a separate privacy
 review. Content-addressed IDs detect content changes but are not signatures or
 proof of which program produced a ranking.
+
+Agent Trace JSON is also an evidence artifact rather than a sanitized log. It
+contains typed actions and bounded observation snapshots so Replay can work
+offline. Its event/terminal SHA-256 chain detects accidental corruption and
+un-recomputed edits; it is not a keyed signature and cannot authenticate a
+Trace against an attacker who can rewrite and rehash the file. Trace artifacts
+remain under Git-ignored `runs/agent-traces/` and must be reviewed before
+sharing.
+
+Agent diagnostic events include safe task/Trace IDs, state, step, tool name,
+duration, outcome and stable error codes. They never include action arguments,
+raw Query text, product fields, observation/report payloads, filesystem paths,
+provider prompts/responses or exception messages. `agent_runtime`,
+`agent_model`, `agent_tools`, `agent_trace` and `agent_replay` can each be
+enabled without enabling the others.
 
 ## Privacy and public errors
 
@@ -169,6 +203,15 @@ systemd-analyze cat-config systemd/journald.conf
    search and correlate the `catalog_search_completed` event using the API
    trace ID. Health status distinguishes a ready index from a missing/corrupt
    one without exposing its filesystem path.
+7. `agent_runtime`: run `make agent-smoke` with only
+   `agent_runtime=DEBUG`; filter by `trace_id`, `state` and `step`.
+8. `agent_model`: enable only `agent_model=DEBUG` to see decision boundaries
+   without tool payloads. The current source is the deterministic fixture.
+9. `agent_tools`: enable only `agent_tools=DEBUG`; filter by `tool_name` and
+   `error_code`. Inspect the Trace, not logs, when evidence payloads are needed.
+10. `agent_trace`: enable only `agent_trace=INFO` to confirm immutable Trace
+    publication. Enable only `agent_replay` when isolating schema, hash, state
+    or report-validation failures during offline Replay.
 
 `tests/test_observability.py` and `tests/test_catalog_search.py` verify JSON structure, module isolation,
 redaction variants, error classification, stable events, low-noise defaults and
@@ -178,3 +221,6 @@ evidence plus paths stay out of stderr. API tests verify that successful,
 backend-failed and unhandled requests remain traceable without logging Query
 strings or exposing internal error causes. Deployment contract tests keep
 Uvicorn access logging disabled in both local and systemd entry points.
+Agent Runtime tests additionally verify independent module control, safe
+success/failure correlation, payload redaction, Trace validation and that
+offline Replay invokes neither Planner nor tools.

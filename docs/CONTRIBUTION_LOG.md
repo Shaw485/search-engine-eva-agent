@@ -27,7 +27,7 @@
 
 ## 2. 已发生的关键决策
 
-以下为截至 2026-08-27 的回填。对没有明确对话证据的事项，不推定为 Owner 决策。
+以下为截至 2026-08-28 的回填。对没有明确对话证据的事项，不推定为 Owner 决策。
 
 | ID | 结论 | 需求/问题来源 | 方案来源 | 最终决策 | 实现与验证 | 归因强度 |
 |---|---|---|---|---|---|---|
@@ -46,6 +46,8 @@
 | D-013 | Stage 2 三条 smoke 比较器共用一个 label-blind Harness：固定种子随机、标题关键词重叠、标题 BM25；在 Owner 数据边界检查点完成前代码硬锁 500-Query dev | 路线图需要可解释的质量下限和防止过早查看 dev | **Codex 设计** | Owner 的“继续”只授权继续执行，没有证据表明其独立选择了算法、seed、计分或门禁实现 | Codex 实现统一 Ranker 契约、比较器、CLI、共享门禁、172 项测试和三条 smoke Run；实现 commit `22877b0` | Codex-designed/implemented; Owner operational authorization |
 | D-014 | Stage 2 `compare_runs` 只比较同一可信数据/Policy/Query/候选证据的两个 Run；统一采用 candidate-baseline delta，保留逐 Query 和逐商品排名 Diff，并把本地 Run store 与 Agent registry 信任边界分开 | 路线图需要让评测结论可验证、可下钻，并为 Agent 工具提供安全证据 | **Codex 设计**；Owner 的“继续”授权执行 | 当前采用为 smoke Harness；Owner 尚未对 random/BM25/overlap 的结果作质量决策 | Codex 实现严格校验、指标复算、CLI、原子不可变制品、结构化诊断和 205 项测试；commit `8df54b8`；smoke evidence 见 `docs/STAGE_2_SMOKE_REPORT.md` | Codex-designed/implemented; Owner operational authorization and pending review |
 | D-015 | 先在现有作品集网站提供全量 ESCI 商品的“优化前”搜索体验，再根据 Owner 实际体验做优化；优化后通道暂不开放 | **Owner 主动提出**：“打造一个基础的搜索系统，然后亚马逊提供的所有商品都能搜索，我去体验一下，然后再进行优化”；并明确“载体是我的那个网站” | Owner 定义产品顺序与载体；**Codex 提出 SQLite FTS5、字段权重、只读 API 和部署方案** | **Owner 决定体验优先级和网站载体**；具体搜索架构没有冒充 Owner 原创 | Codex 实现全量索引构建器、搜索服务、API、网站接入、结构化诊断、测试和 ADR，并部署、验证 1,814,924 商品生产索引；Owner 授权部署但仍负责接下来的体验与 Bad Case 判断 | Owner-originated product decision + Codex technical design/implementation |
+| D-016 | 在 dev 解锁前先实现 smoke-only、确定性的 Agent Runtime 垂直切片：四个白名单领域工具、受信 Run registry、基于观察分支的 Fake planner、有限状态/预算、Trace 与离线 Replay；真实模型和通用插件系统后置 | Owner 要求项目最终必须体现 Agent，并在 Codex 解释实施顺序后回复“可以”“继续” | **Codex 提出具体 Runtime 架构、安全边界和分阶段实现** | Owner 批准继续建设 Agent 方向；这不是 Owner 独立设计 Runtime 细节。当前受限脚手架已通过本地验收，但完整 Agent 阶段仍未完成 | Codex 实现代码、测试、日志和文档；外部语义/安全复审发现的问题由 Codex 修复；277 项测试、Ruff 与仓库策略检查通过 | Codex-proposed/implemented; Owner-approved direction |
+| D-017 | 关键知识仍须随开发及时解释，但不再用问答或测验中断执行；未取得独立理解证据时不把学习状态标为完成，也不解锁 500-Query dev | **Owner 主动提出**：“不要问答了。继续” | Owner 定义协作节奏；Codex 将其落实为“进度内讲解 + 保持门禁” | **Owner** | Codex 更新项目协作指令与学习记录；Stage 1/2 学习状态仍为 pending | Owner-originated workflow decision + Codex operationalization |
 
 ### 尚未拍板的提案
 
@@ -59,6 +61,8 @@
 
 - 定义最终产品方向：做能够展示计划、工具调用、观察分支和证据结论的搜索评测 Agent。
 - 定义学习与协作方式：关键知识必须本人掌握，要亲手走一遍搜索系统，Codex 提供代码和反馈。
+- 决定关键知识改为随进度直接讲解，不再用问答/测验中断执行；该流程决定
+  不等于已经完成相应知识验证。
 - 定义作品集入口和搜索体验页的关键交互、信息取舍，并通过实际页面反馈推动修正。
 - 定义软件必须具备模块化日志、独立排障、脱敏、生产降噪和保留说明等质量要求。
 - 保留关键政策的最终拍板权；目前明确批准了 `esci-primary-v1` 相关性政策。
@@ -73,6 +77,8 @@
 - 设计并实现统一 Ranker Harness、随机/关键词重叠比较器、dev 学习门禁，以及模块化结构化诊断能力。
 - 设计并实现受信 Run 比较契约、总体/逐 Query/逐商品 Diff、本地 Run store
   防线与未来 Agent registry 边界。
+- 设计并实现 smoke-only Agent Runtime 脚手架：严格领域工具、观察驱动的
+  确定性 Planner、状态/预算/权限、Trace/Replay、模块化日志与安全测试。
 - 运行自动测试、数据校验和 smoke 实验，并把证据写入报告和 Git commits。
 - 讲解搜索原理、提示关键知识，并维护学习检查点和本归因台账。
 

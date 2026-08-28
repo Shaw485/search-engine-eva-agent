@@ -7,7 +7,8 @@ to a dataset version, run configuration, metric, and ranked product list.
 
 ## Project status
 
-**Full-catalog website baseline plus Stage 2 Harness: in progress.** The Owner
+**Full-catalog baseline, Stage 2 Harness, and deterministic Agent Runtime
+scaffold: in progress.** The Owner
 has prioritized an experience milestone: all 1,814,924 official ESCI products
 must first be searchable on the existing portfolio page, while the optimized
 lane remains closed. This product-search track uses a persistent SQLite FTS5
@@ -24,6 +25,12 @@ per-Query ranking differences. Execution remains smoke-only: the 500-Query dev
 profile is code-locked until the Owner data-boundary checkpoint is recorded, and
 the 8,956-Query frozen test remains unavailable to tuning runs.
 
+A smoke-only Stage 3/4 scaffold now exposes four strictly typed evaluation
+tools through a finite Runtime, branches on comparison observations, and stores
+an offline-replayable Trace. Its planner is deliberately deterministic and no
+LLM is connected yet. This proves the control/evidence path, not completed Agent
+reasoning or a search-quality improvement.
+
 The optional OpenSearch 3.8.0 adapter, mapping, and Apple Silicon-compatible
 Compose profile are implemented. Live container verification remains pending
 because Docker is not installed on the current development host. This is an
@@ -37,6 +44,8 @@ explicit pending integration check, not an implicit fallback or a claimed pass.
 - Data dictionary: [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md)
 - Backend decision: [docs/adr/001-search-backend.md](docs/adr/001-search-backend.md)
 - Full-catalog baseline decision: [docs/adr/002-full-catalog-baseline.md](docs/adr/002-full-catalog-baseline.md)
+- Agent Runtime guide: [docs/AGENT_RUNTIME.md](docs/AGENT_RUNTIME.md)
+- Agent Runtime decision: [docs/adr/003-agent-runtime-mvp.md](docs/adr/003-agent-runtime-mvp.md)
 - Required learning: [docs/LEARNING_CHECKPOINTS.md](docs/LEARNING_CHECKPOINTS.md)
 - Decision and contribution provenance: [docs/CONTRIBUTION_LOG.md](docs/CONTRIBUTION_LOG.md)
 - Logging and independent diagnostics: [docs/LOGGING.md](docs/LOGGING.md)
@@ -65,6 +74,7 @@ make data-sample
 make smoke
 make eval-baseline
 make compare-runs
+BASELINE_RUN_ID=... CANDIDATE_RUN_ID=... make agent-smoke
 make catalog-index
 EVAL_RANKER=title-bm25 make eval-baseline
 QUERY="iphone 15 pro case" make smoke
@@ -76,12 +86,18 @@ formal quality decision. `make compare-runs` then compares the latest random
 baseline with title BM25 and stores immutable JSON plus a Markdown diagnostic
 report under ignored `runs/comparisons/`.
 
+`make agent-smoke` accepts two already trusted smoke Run IDs, executes the
+deterministic observation-driven Runtime, and stores a Trace under ignored
+`runs/agent-traces/`. See [docs/AGENT_RUNTIME.md](docs/AGENT_RUNTIME.md) for
+Replay, logging filters and the explicit limitations before a real model is
+connected.
+
 The Stage 2 CLI trusts the local operator and only loads artifacts directly from
 the project's ignored `runs/` store. Run and comparison IDs are content hashes:
 they detect accidental or conflicting content changes, but they are not digital
 signatures and do not prove that a ranking was produced by the declared code.
-The Stage 3 Agent therefore will accept validated Run IDs from a controlled
-registry, never arbitrary filesystem paths.
+The current Stage 3 scaffold therefore accepts validated Run IDs from a
+controlled registry, never arbitrary filesystem paths.
 
 The Stage 1 data path is separate so CI never downloads the 1.16 GB source:
 

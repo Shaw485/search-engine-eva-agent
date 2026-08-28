@@ -162,6 +162,32 @@ def _resolve_run_path(path: Path) -> Path:
     return target
 
 
+def validate_trusted_run(
+    run: dict[str, Any],
+    *,
+    expected_profile: str,
+    project_root: str | Path,
+    manifest_path: str | Path,
+    role: str = "run",
+) -> dict[QueryKey, dict[str, Any]]:
+    """Validate one Run against its schema and the trusted Stage 1 manifest.
+
+    This is the public single-Run boundary used by Agent tools. It deliberately
+    performs the same content, metric, dataset and learning-gate checks as the
+    two-Run comparator without requiring a synthetic self-comparison.
+    """
+
+    ensure_profile_authorized(expected_profile)
+    queries = _validate_run(run, role=role)
+    trusted_profile = EvaluationProfile.from_stage1_manifest(
+        profile_id=expected_profile,
+        project_root=project_root,
+        manifest_path=manifest_path,
+    )
+    _validate_trusted_provenance(run, trusted_profile=trusted_profile, role=role)
+    return queries
+
+
 def compare_runs(
     baseline_run: dict[str, Any],
     candidate_run: dict[str, Any],
@@ -173,17 +199,17 @@ def compare_runs(
 ) -> dict[str, Any]:
     """Return candidate-minus-baseline aggregate and per-Query differences."""
 
-    ensure_profile_authorized(expected_profile)
     revision = comparator_revision.strip()
     if not _SOURCE_REVISION_PATTERN.fullmatch(revision):
         raise ValueError("comparator_revision must be a full lowercase Git commit SHA")
-    baseline_queries = _validate_run(baseline_run, role="baseline")
-    candidate_queries = _validate_run(candidate_run, role="candidate")
+    ensure_profile_authorized(expected_profile)
     trusted_profile = EvaluationProfile.from_stage1_manifest(
         profile_id=expected_profile,
         project_root=project_root,
         manifest_path=manifest_path,
     )
+    baseline_queries = _validate_run(baseline_run, role="baseline")
+    candidate_queries = _validate_run(candidate_run, role="candidate")
     _validate_trusted_provenance(
         baseline_run, trusted_profile=trusted_profile, role="baseline"
     )

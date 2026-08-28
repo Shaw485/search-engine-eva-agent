@@ -21,7 +21,21 @@ from collections.abc import Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, TextIO
 
-LOG_MODULES = frozenset({"api", "backend", "catalog", "data", "evaluation", "ranking"})
+LOG_MODULES = frozenset(
+    {
+        "agent_model",
+        "agent_replay",
+        "agent_runtime",
+        "agent_tools",
+        "agent_trace",
+        "api",
+        "backend",
+        "catalog",
+        "data",
+        "evaluation",
+        "ranking",
+    }
+)
 OFF_LEVEL = logging.CRITICAL + 10
 REDACTED = "[REDACTED]"
 _MAX_TEXT_LENGTH = 1_000
@@ -324,7 +338,7 @@ def add_logging_arguments(parser: argparse.ArgumentParser) -> None:
         action="append",
         default=[],
         metavar="MODULE=LEVEL",
-        help="repeat to override api/backend/data/evaluation/ranking independently",
+        help="repeat to override one diagnostics module independently",
     )
     parser.add_argument(
         "--log-format",

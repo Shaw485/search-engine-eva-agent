@@ -12,8 +12,8 @@
 当前知识：
 为什么现在必须理解：
 最低掌握范围：
-一个具体例子或练习：
-验证问题：
+一个具体例子：
+验证证据（如已有）：
 ```
 
 满足以下任一条件时，视为“必须学习”：
@@ -47,9 +47,12 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
 - 当前知识：Parquet 是离线商品数据文件；倒排索引是面向在线查询的检索结构。
 - 为什么现在必须理解：否则会误以为网页每次搜索都扫描 181 万商品，或把“全库能搜”误说成“全库质量已评测”。
 - 最低掌握范围：能解释建索引为什么把一次性离线成本换成低延迟在线查询；能解释 ESCI 对任意 Query 没有全库完整标签。
-- 具体练习：对比“扫描全部 1,814,924 行找 `wireless mouse`”与“从倒排表直接读取 `wireless`、`mouse` 的 posting list 并求交集”。
-- 验证问题：为什么我们可以让全部商品参与搜索，却仍然不能计算可信的全 Amazon Recall@10？
-- 状态：**Awaiting owner answer**
+- 具体例子：扫描全部 1,814,924 行找 `wireless mouse`，与从倒排表直接读取
+  `wireless`、`mouse` 的 posting list 并求交集，前者把全部工作留到每次
+  查询，后者把主要工作提前到一次性建索引。
+- 验证证据：2026-08-28 已随开发进度提供说明；Owner 要求后续不再以问答
+  形式打断执行，因此不能把阅读或“继续”记作掌握证据。
+- 状态：**Explanation delivered; independent verification pending**
 
 ## 检查点记录
 
@@ -58,19 +61,19 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
 | 日期 | 阶段 | 知识 | 验证方式 | 结果 |
 |---|---|---|---|---|
 | 2026-08-26 | 0. 工程骨架 | BM25 与向量搜索的区别 | Owner 口头解释精确型号 Query 的检索取舍 | **Completed** |
+| 2026-08-28 | 协作方式 | 关键知识继续随进度讲解，但不再用问答中断开发 | Owner 明确要求“不要问答了。继续”；这是一项流程决定，不是知识掌握证明 | **Adopted; learning gates unchanged** |
 
 状态只能在完成验证后从 `Pending` 更新为 `Completed`；仅仅阅读说明不算完成。
 
-## 当前待验证问题
+## 当前待补充的独立验证证据
 
 ### Stage 1：数据边界
 
 - 阶段：1. ESCI 数据
 - 提醒日期：2026-08-26
-- 问题：如果 `wireless mouse` 同时出现在 train 和 test，为什么 test 高分
-  不能证明模型能泛化到新 Query？另外，为什么 ESCI 中未标注的商品不能
-  自动当成 Irrelevant，也不能据此宣称全 Amazon 商品库 Recall？
-- 状态：**Awaiting owner answer**
+- 最低证据：Owner 日后能用自己的话解释 Query 泄漏为什么会夸大泛化能力，
+  以及未标注商品为什么既不能自动视为 Irrelevant，也不能支撑全库 Recall。
+- 状态：**Explanation delivered; independent verification pending**
 
 ### Stage 2：指标与局部退化
 
@@ -80,12 +83,12 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
   nDCG@10 提升 `0.173312`，但 20 个 Query 中仍有 5 个退化；Query
   `15281` 的 nDCG@10 下降 `0.322992`。`comparison-dc727a4e03ca` 中
   BM25 相对 overlap 的 nDCG@10 更高，但 MRR@10 与 Success@1 更低。
-- 问题：为什么“平均 nDCG@10 上升”不能直接推出 BM25 已经胜出？如果产品
-  更看重首个相关商品，而不是前 10 名的分级相关性，你会优先看哪个指标，
-  下一步要检查哪些 Bad Case？另外，为什么三条策略都为 1.0 的 Success@5
-  在这个 smoke 上没有决策价值？
-- 状态：**Awaiting owner answer**
+- 最低证据：Owner 日后能说明平均 nDCG@10 提升为什么可能掩盖局部退化；
+  能依据产品目标在 nDCG、MRR、Success 之间作选择；能解释一个在所有方案
+  上恒定为 1.0 的指标为什么没有区分度。
+- 状态：**Explanation delivered; independent verification pending**
 
-执行保护：当前 Stage 2 共享正式评测入口与 CLI 都只允许 smoke。Owner 用
-自己的话完成 Stage 1 数据边界回答和 Stage 2 指标练习并记录证据后，才
-通过代码变更解锁 500-Query dev；“继续执行”不视为知识验证。
+执行保护：当前 Stage 2 共享正式评测入口、CLI 与 Agent 工具都只允许
+smoke。500-Query dev 继续代码锁定；日后记录到独立理解证据并作出明确
+解锁决定后才通过代码变更开放。“继续执行”、阅读说明或允许实现均不视为
+知识验证。

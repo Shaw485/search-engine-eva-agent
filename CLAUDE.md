@@ -13,7 +13,11 @@
 - Learning reminders happen before the affected implementation or decision, not
   after it has already been completed.
 - Each reminder should explain why the concept matters, the minimum required
-  understanding, a concrete example, and a short verification question.
+  understanding, and a concrete example inline with normal progress updates.
+- Do not interrupt execution with quizzes or question-and-answer checks. The
+  Owner requested this collaboration mode on 2026-08-28. Acknowledgement and
+  permission to continue are not proof of mastery; keep dependent learning
+  gates locked until independent evidence is later available.
 - Do not create noise by teaching routine syntax or boilerplate unless the owner
   asks for it.
 - The owner should personally understand metric meaning, experimental validity,

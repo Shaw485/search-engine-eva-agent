@@ -107,8 +107,8 @@ Owner 决定先在现有 `shawspace.cn` 搜索体验页搜索全部 1,814,924 �
 | 0. 工程骨架与搜索 Smoke | 可重复启动的本地搜索后端 | 为工具化提供稳定接口 | **Completed (OpenSearch live check pending)** |
 | 1. ESCI 数据与实验边界 | 可复现 train/dev/test、Manifest、数据报告 | 给 Agent 提供可信数据边界 | **Technical gate passed; learning check pending** |
 | 2. Search Evaluation Harness | 指标、BM25 基线、Run 与对比报告 | Agent 可依赖的确定性工具层 | **In Progress** |
-| 3. 最小搜索评测 Agent | 首个计划—工具—观察—报告闭环 | 第一次可见的真实 Agent 行为 | **Not Started** |
-| 4. Agent Runtime Harness | 状态机、权限、预算、Trace、Replay | Agent 可控、可恢复、可复现 | **Not Started** |
+| 3. 最小搜索评测 Agent | 首个计划—工具—观察—报告闭环 | 第一次可见的真实 Agent 行为 | **In Progress: deterministic scaffold only** |
+| 4. Agent Runtime Harness | 状态机、权限、预算、Trace、Replay | Agent 可控、可恢复、可复现 | **In Progress: local scaffold only** |
 | 5. Agent Evaluation Harness | 黄金任务集和 Agent 成绩单 | 证明 Agent 不是偶然成功 | **Not Started** |
 | 6. 搜索策略与诊断实验室 | Multi-field BM25、Vector、Hybrid、Rerank、Bad Case | Agent 获得更多可组合实验工具 | **Not Started** |
 | 7. 诊断与优化 Agent | 自动提出假设、运行受控实验并给出决策 | 完整的搜索评测 Agent | **Not Started** |
@@ -188,7 +188,7 @@ Bad Case 判断尚未完成。
 
 目标：尽早完成一个窄但真实的 Agent 垂直闭环。
 
-第一批只读工具：
+第一批受控领域工具（只读证据工具 + 受限的 Run/比较产物创建）：
 
 ```text
 inspect_query       查看 Query、候选商品、标签和字段
@@ -228,6 +228,11 @@ Agent 循环：
 
 本阶段是作品第一次可以明确展示“Agent”的节点。
 
+当前进度（2026-08-28）：四个 smoke-only 领域工具、受信 Run registry 和
+观察后分支的 `FakeBranchingPlanner` 已形成第一条确定性垂直切片。它用于
+验证 Runtime 与证据链，不是真实 LLM Planner，也尚未满足“至少 10 个固定
+Agent 任务”的完整验收，因此不能对外声称阶段 3 已完成。
+
 ### 阶段 4：Agent Runtime Harness、Trace 与 Replay
 
 目标：控制 Agent，而不是只让它成功演示一次。
@@ -248,6 +253,12 @@ Agent 循环：
 - 任一失败都能定位到具体状态和工具调用。
 - Replay 能还原历史工具结果和报告引用。
 - 相同 Trace 的证据不会因外部模型变化而消失。
+
+当前进度（2026-08-28）：有限状态、白名单能力、步数/调用/失败/大小预算、
+结构化错误、Trace 与离线 Replay 已有本地脚手架。Trace 的无密钥 SHA-256
+链用于发现损坏，不是数字签名；elapsed budget 只在本地动作之间协作检查，
+不能终止一个永不返回的外部调用。真实模型接入前必须补可强制终止的 worker
+deadline、模型/Prompt/Token/成本版本与更强来源认证。因此阶段 4 仍为进行中。
 
 ### 阶段 5：Agent Evaluation Harness
 
@@ -361,16 +372,16 @@ Agent 不可以：
 
 ### Now
 
-- 完成阶段 1 Owner 学习门槛。
-- 手写并测试 nDCG、MRR、Success。
-- 固化正式 BM25 基线和 Run Manifest。
-- 生成第一份 dev Baseline 报告。
+- 稳定 smoke-only Agent Runtime 脚手架的证据绑定、失败边界与 Replay。
+- 用固定 smoke Run 验证一次“比较 → 观察退化 → 下钻 Query → 终态”分支。
+- 关键知识随进度提供说明但不进行问答；500-Query dev 继续代码锁定。
 
 ### Next
 
-- 工具化 `inspect_query/run_ranker/evaluate_run/compare_runs`。
-- 完成最小 Agent 垂直闭环。
-- 增加 Runtime Harness、Trace、Replay 和 Agent Eval 集。
+- 建立至少 10 个固定 Agent 任务和 Agent Eval 判定，区分 Runtime 正确与
+  Planner 任务完成质量。
+- 接入第一个真实模型 Planner，但继续使用相同 Tool Schema、权限和证据约束。
+- 在接入任何网络/模型工具前加入可强制终止的 worker deadline。
 
 ### Later
 
@@ -451,6 +462,10 @@ Agent 不可以：
 
 ## 10. 当前唯一下一步
 
-完成阶段 1 的 Owner 数据泄漏检查，然后将已经通过 smoke 的标题 BM25 候选集重排扩展到完整 500-Query dev，并加入随机与关键词重叠对照，形成第一份正式 Baseline 报告。
+完成并验收 smoke-only Agent Runtime 确定性垂直切片：四个工具严格
+输入/输出、任务有序比较证据绑定、观察驱动分支、有限预算、Trace 与离线
+Replay。该工作不依赖也不解锁 500-Query dev。
 
-在 dev Run 成为可信证据后，立即进入阶段 3 的四工具 Agent 垂直闭环，不提前等待 Vector、Hybrid 或 Web 美化。
+随后建立固定 Agent 任务集，再接入真实模型 Planner。500-Query dev 仍需
+独立学习证据和明确解锁决定；无论“继续”还是完成 Runtime 代码都不会自动
+跨越该门禁。
