@@ -38,11 +38,16 @@ PROPOSAL_ID_PATTERN = re.compile(r"proposal-[0-9a-f]{12}\Z")
 STRATEGY_CATALOG_SCHEMA_VERSION = "search-strategy-catalog-v1"
 
 
-def load_strategy_catalog(*, project_root: str | Path) -> dict[str, Any]:
+def load_strategy_catalog(
+    *,
+    project_root: str | Path,
+    artifact_root: str | Path | None = None,
+) -> dict[str, Any]:
     """Return the currently approved runtime strategy catalog."""
 
     root = Path(project_root).resolve(strict=True)
-    strategy_dir = _strategy_dir(root)
+    run_store = _resolve_artifact_root(root, artifact_root)
+    strategy_dir = _strategy_dir(run_store)
     catalog_path = strategy_dir / "catalog.json"
     active_path = strategy_dir / "active.json"
     catalog = _load_json_or_default(
@@ -71,6 +76,7 @@ def load_strategy_catalog(*, project_root: str | Path) -> dict[str, Any]:
 def generate_strategy_proposal(
     *,
     project_root: str | Path,
+    artifact_root: str | Path | None = None,
     profile_id: Literal["smoke"] = DEFAULT_PROPOSAL_PROFILE,
     revision_provider: Callable[[Path], str] = require_clean_code_revision,
 ) -> dict[str, Any]:
@@ -81,7 +87,7 @@ def generate_strategy_proposal(
     root = Path(project_root).resolve(strict=True)
     manifest_path = root / "data" / "manifests" / "esci-stage1.json"
     policy_path = root / "configs" / "evaluation" / "esci-primary-v1.json"
-    run_store = root / "runs"
+    run_store = _resolve_artifact_root(root, artifact_root)
     comparison_store = run_store / "comparisons"
     proposal_store = run_store / "strategy-proposals"
     revision = revision_provider(root)
@@ -161,6 +167,7 @@ def generate_strategy_proposal(
 def apply_strategy_decision(
     *,
     project_root: str | Path,
+    artifact_root: str | Path | None = None,
     proposal_id: str,
     decision: Literal["approve", "reject"],
 ) -> dict[str, Any]:
@@ -169,9 +176,10 @@ def apply_strategy_decision(
     if not PROPOSAL_ID_PATTERN.fullmatch(proposal_id):
         raise ValueError("invalid proposal_id")
     root = Path(project_root).resolve(strict=True)
-    proposal_path = root / "runs" / "strategy-proposals" / f"{proposal_id}.json"
+    run_store = _resolve_artifact_root(root, artifact_root)
+    proposal_path = run_store / "strategy-proposals" / f"{proposal_id}.json"
     proposal = _load_proposal(proposal_path)
-    existing_decision = _load_existing_decision(root, proposal_id)
+    existing_decision = _load_existing_decision(run_store, proposal_id)
     if existing_decision is not None:
         if existing_decision.get("decision") != decision:
             raise ValueError("proposal already has a different decision")
@@ -182,7 +190,7 @@ def apply_strategy_decision(
     applied = False
     active_strategy_path: str | None = None
     if decision == "approve":
-        active_strategy_path = _write_strategy_catalog(root, proposal)
+        active_strategy_path = _write_strategy_catalog(run_store, proposal)
         applied = True
     decision_payload = {
         "active_strategy_path": active_strategy_path,
@@ -194,10 +202,10 @@ def apply_strategy_decision(
     }
     decision_id = _content_id("decision", decision_payload)
     decision_payload["decision_id"] = decision_id
-    decision_store = root / "runs" / "strategy-decisions"
+    decision_store = run_store / "strategy-decisions"
     write_immutable_json(decision_store / f"{decision_id}.json", decision_payload)
     atomic_write_text(
-        _decision_pointer(root, proposal_id),
+        _decision_pointer(run_store, proposal_id),
         json.dumps(decision_payload, ensure_ascii=False, indent=2, sort_keys=True)
         + "\n",
     )
@@ -332,8 +340,8 @@ def _query_delta_examples(
     ]
 
 
-def _write_strategy_catalog(root: Path, proposal: dict[str, Any]) -> str:
-    strategy_dir = _strategy_dir(root)
+def _write_strategy_catalog(run_store: Path, proposal: dict[str, Any]) -> str:
+    strategy_dir = _strategy_dir(run_store)
     strategy_dir.mkdir(parents=True, exist_ok=True)
     strategy = proposal["strategy"]
     entry = {
@@ -376,19 +384,34 @@ def _write_strategy_catalog(root: Path, proposal: dict[str, Any]) -> str:
         active_path,
         json.dumps(entry, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
     )
-    return str(active_path.relative_to(root))
+    # Keep the response stable and avoid exposing the server filesystem path.
+    return "runs/search-strategies/active.json"
 
 
-def _strategy_dir(root: Path) -> Path:
-    return root / "runs" / "search-strategies"
+def _resolve_artifact_root(
+    project_root: Path, artifact_root: str | Path | None
+) -> Path:
+    if artifact_root is None:
+        return project_root / "runs"
+    requested = Path(artifact_root)
+    if not requested.is_absolute():
+        raise ValueError("strategy artifact root must be an absolute path")
+    resolved = requested.resolve(strict=True)
+    if not resolved.is_dir():
+        raise ValueError("strategy artifact root must be a directory")
+    return resolved
 
 
-def _decision_pointer(root: Path, proposal_id: str) -> Path:
-    return root / "runs" / "strategy-decisions" / "by-proposal" / f"{proposal_id}.json"
+def _strategy_dir(run_store: Path) -> Path:
+    return run_store / "search-strategies"
 
 
-def _load_existing_decision(root: Path, proposal_id: str) -> dict[str, Any] | None:
-    pointer = _decision_pointer(root, proposal_id)
+def _decision_pointer(run_store: Path, proposal_id: str) -> Path:
+    return run_store / "strategy-decisions" / "by-proposal" / f"{proposal_id}.json"
+
+
+def _load_existing_decision(run_store: Path, proposal_id: str) -> dict[str, Any] | None:
+    pointer = _decision_pointer(run_store, proposal_id)
     if not pointer.exists():
         return None
     payload = json.loads(pointer.read_text(encoding="utf-8"))

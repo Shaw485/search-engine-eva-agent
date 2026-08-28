@@ -81,8 +81,9 @@ Agent can experiment without arbitrary code execution.
 
 ## First implementation milestone
 
-The first implemented slice is API-first so the portfolio page can act as the
-approval surface:
+The first implemented slice is API-first so the public portfolio page can show
+the proposal evidence. Human decisions are deliberately restricted to the
+server's direct loopback owner channel until real owner authentication exists:
 
 ```text
 POST /agent/strategy/propose
@@ -90,15 +91,20 @@ POST /agent/strategy/propose
   -> tests title-BM25 plus exact coverage/model/phrase boosts
   -> runs baseline and candidate on the same smoke data
   -> compares Runs
-  -> writes a StrategyProposal artifact under runs/strategy-proposals/
+  -> writes a StrategyProposal artifact under the configured artifact root
 
 POST /agent/strategy/decision
-  -> records approve/reject under runs/strategy-decisions/
-  -> approve writes runs/search-strategies/catalog.json and active.json
+  -> owner-only; records approve/reject under strategy-decisions/
+  -> approve writes search-strategies/catalog.json and active.json
 
 GET /agent/strategy/catalog
   -> returns approved strategies for the portfolio strategy platform
 ```
+
+Local development defaults the artifact root to `runs/`. Production uses the
+private `/var/lib/search-engine-eva-agent/runtime/` directory so the service
+cannot modify its source checkout. Public Nginx requests to the decision route
+return 404.
 
 The artifact should contain:
 

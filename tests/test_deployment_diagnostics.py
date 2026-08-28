@@ -17,6 +17,8 @@ def test_all_documented_uvicorn_entry_points_disable_access_logs() -> None:
 def test_proxy_disables_request_line_access_log() -> None:
     nginx = (ROOT / "deploy/nginx-search-eval.conf").read_text(encoding="utf-8")
     assert "access_log off;" in nginx
+    assert "location = /search-eval-api/agent/strategy/decision" in nginx
+    assert "return 404;" in nginx
 
 
 def test_catalog_artifact_is_read_only_and_configured_for_service_user() -> None:
@@ -32,3 +34,22 @@ def test_catalog_artifact_is_read_only_and_configured_for_service_user() -> None
     assert "SEARCH_LOG_LEVEL_CATALOG=WARNING" in service
     assert "-o root -g www-data -m 0640" in deployment
     assert "/catalog/search" in deployment
+
+
+def test_agent_runtime_store_is_the_only_writable_service_path() -> None:
+    service = (ROOT / "deploy/search-engine-eva-agent.service").read_text(
+        encoding="utf-8"
+    )
+    deployment = (ROOT / "docs/DEPLOYMENT.md").read_text(encoding="utf-8")
+    runtime = "/var/lib/search-engine-eva-agent/runtime"
+
+    assert "EnvironmentFile=/etc/search-engine-eva-agent.env" in service
+    assert f"Environment=SEARCH_AGENT_ARTIFACT_ROOT={runtime}" in service
+    assert "Environment=SEARCH_LOG_LEVEL_AGENT_OPTIMIZATION=INFO" in service
+    assert "ProtectSystem=strict" in service
+    assert "ReadOnlyPaths=/var/www/search-engine-eva-agent" in service
+    assert f"ReadWritePaths={runtime}" in service
+    assert "UMask=0027" in service
+    assert f"-o www-data -g www-data -m 0750 {runtime}" in deployment
+    assert "SEARCH_CODE_REVISION=" in deployment
+    assert "sudo systemctl daemon-reload" in deployment

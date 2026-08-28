@@ -7,14 +7,18 @@ Type=simple
 User=www-data
 Group=www-data
 WorkingDirectory=/var/www/search-engine-eva-agent
+EnvironmentFile=/etc/search-engine-eva-agent.env
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=SEARCH_BACKEND=local
 Environment=SEARCH_CATALOG_INDEX=/var/lib/search-engine-eva-agent/catalog-baseline-v1.sqlite3
+Environment=SEARCH_AGENT_ARTIFACT_ROOT=/var/lib/search-engine-eva-agent/runtime
 Environment=SEARCH_LOG_FORMAT=json
 Environment=SEARCH_LOG_LEVEL=WARNING
 Environment=SEARCH_LOG_LEVEL_API=INFO
 Environment=SEARCH_LOG_LEVEL_BACKEND=WARNING
 Environment=SEARCH_LOG_LEVEL_CATALOG=WARNING
+Environment=SEARCH_LOG_LEVEL_AGENT_OPTIMIZATION=INFO
 Environment=SEARCH_LOG_LEVEL_RANKING=OFF
 ExecStart=/var/www/search-engine-eva-agent/.venv/bin/python -m uvicorn apps.api.main:app --host 127.0.0.1 --port 8010 --no-access-log
 StandardOutput=journal
@@ -24,8 +28,21 @@ Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
 ProtectHome=true
-ProtectSystem=full
+ProtectSystem=strict
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ReadOnlyPaths=/var/www/search-engine-eva-agent
+ReadWritePaths=/var/lib/search-engine-eva-agent/runtime
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0027
 
 [Install]
 WantedBy=multi-user.target

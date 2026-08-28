@@ -34,7 +34,10 @@ offline-replayable Trace, and has an API-first strategy proposal loop for the
 portfolio Agent workbench. The first proposal loop tests
 `candidate-title-bm25-exact-boost-v1` against the title-BM25 baseline and writes
 approve/reject decisions plus approved runtime strategies under ignored
-`runs/`. Its planner is still bounded and deterministic; this proves the
+`runs/` locally or a private production artifact root. The public workbench can
+request and inspect proposals; approve/reject remains restricted to the server's
+loopback owner channel until real owner authentication exists. Its planner is
+still bounded and deterministic; this proves the
 control/evidence path, not completed LLM reasoning or production search quality.
 
 The optional OpenSearch 3.8.0 adapter, mapping, and Apple Silicon-compatible

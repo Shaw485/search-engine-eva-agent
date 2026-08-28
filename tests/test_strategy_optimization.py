@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
 from apps.api import main as api
 from search_quality.agent.optimization import (
@@ -17,6 +18,22 @@ from search_quality.agent.optimization import (
 from search_quality.observability import configure_logging, logging_context
 
 PROJECT_ROOT = Path(__file__).parents[1]
+
+
+def _request(
+    *,
+    client: tuple[str, int] = ("127.0.0.1", 50000),
+    headers: list[tuple[bytes, bytes]] | None = None,
+) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/agent/strategy/decision",
+            "headers": headers or [],
+            "client": client,
+        }
+    )
 
 
 def _copy_smoke_project(tmp_path: Path) -> Path:
@@ -56,6 +73,36 @@ def test_agent_generates_real_strategy_proposal_artifacts(tmp_path: Path) -> Non
     assert (
         project / "runs" / "strategy-proposals" / f"{proposal['proposal_id']}.json"
     ).is_file()
+
+
+def test_agent_artifacts_can_live_outside_read_only_project(tmp_path: Path) -> None:
+    project = _copy_smoke_project(tmp_path)
+    artifact_root = tmp_path / "runtime"
+    artifact_root.mkdir()
+
+    proposal = generate_strategy_proposal(
+        project_root=project,
+        artifact_root=artifact_root,
+        revision_provider=lambda _root: "a" * 40,
+    )
+    decision = apply_strategy_decision(
+        project_root=project,
+        artifact_root=artifact_root,
+        proposal_id=proposal["proposal_id"],
+        decision="approve",
+    )
+    catalog = load_strategy_catalog(
+        project_root=project,
+        artifact_root=artifact_root,
+    )
+
+    assert not (project / "runs").exists()
+    assert (
+        artifact_root / "strategy-proposals" / f"{proposal['proposal_id']}.json"
+    ).is_file()
+    assert (artifact_root / "search-strategies" / "active.json").is_file()
+    assert decision["active_strategy_path"] == "runs/search-strategies/active.json"
+    assert catalog["active_strategy_id"] == "candidate-title-bm25-exact-boost-v1"
 
 
 def test_strategy_decision_approve_updates_catalog_and_is_idempotent(
@@ -114,6 +161,8 @@ def test_strategy_decision_reject_records_without_updating_catalog(
 
 
 def test_api_strategy_routes_return_contracts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SEARCH_AGENT_ARTIFACT_ROOT", raising=False)
+    monkeypatch.delenv("SEARCH_CODE_REVISION", raising=False)
     monkeypatch.setattr(
         api,
         "generate_strategy_proposal",
@@ -134,14 +183,68 @@ def test_api_strategy_routes_return_contracts(monkeypatch: pytest.MonkeyPatch) -
         "proposal_id": "proposal-aaaaaaaaaaaa"
     }
     assert api.agent_strategy_decision(
+        _request(),
         api.StrategyDecisionRequest(
             proposal_id="proposal-aaaaaaaaaaaa",
             decision="approve",
-        )
+        ),
     ) == {"decision_id": "decision-bbbbbbbbbbbb"}
     assert api.agent_strategy_catalog() == {
         "schema_version": "search-strategy-catalog-v1"
     }
+
+
+def test_api_uses_external_artifacts_and_deployment_revision_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_root = tmp_path / "runtime"
+    artifact_root.mkdir()
+    revision = "b" * 40
+    calls: list[dict] = []
+    monkeypatch.setenv("SEARCH_AGENT_ARTIFACT_ROOT", str(artifact_root))
+    monkeypatch.setenv("SEARCH_CODE_REVISION", revision)
+    api._AGENT_PROPOSAL_CACHE.clear()
+
+    def proposal(**kwargs):
+        calls.append(kwargs)
+        return {"proposal_id": "proposal-bbbbbbbbbbbb"}
+
+    monkeypatch.setattr(api, "generate_strategy_proposal", proposal)
+
+    first = api.agent_strategy_propose(api.StrategyProposalRequest())
+    second = api.agent_strategy_propose(api.StrategyProposalRequest())
+
+    assert first == second == {"proposal_id": "proposal-bbbbbbbbbbbb"}
+    assert len(calls) == 1
+    assert calls[0]["artifact_root"] == artifact_root.resolve()
+    assert calls[0]["revision_provider"](PROJECT_ROOT) == revision
+
+
+def test_api_rejects_public_strategy_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    def decision(**_kwargs):
+        nonlocal called
+        called = True
+        return {}
+
+    monkeypatch.setattr(api, "apply_strategy_decision", decision)
+    public_request = _request(
+        headers=[(b"x-forwarded-for", b"203.0.113.10")],
+    )
+    with pytest.raises(HTTPException) as captured:
+        api.agent_strategy_decision(
+            public_request,
+            api.StrategyDecisionRequest(
+                proposal_id="proposal-aaaaaaaaaaaa",
+                decision="approve",
+            ),
+        )
+
+    assert captured.value.status_code == 404
+    assert called is False
 
 
 def test_api_strategy_proposal_failure_is_safe(

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sqlite3
+import threading
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -25,6 +27,7 @@ from search_quality.catalog import (
     CatalogSearchService,
     InvalidCatalogQuery,
 )
+from search_quality.evaluation.artifacts import require_clean_code_revision
 from search_quality.observability import (
     classify_error,
     configure_logging,
@@ -36,12 +39,76 @@ from search_quality.smoke import run_smoke
 
 configure_logging()
 logger = logging.getLogger("search_quality.api")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CODE_REVISION_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
+_AGENT_PROPOSAL_LOCK = threading.Lock()
+_AGENT_PROPOSAL_CACHE: dict[tuple[str, str, str], dict] = {}
 
 app = FastAPI(
     title="Search Engine EVA Agent",
-    version="0.2.0",
+    version="0.3.0",
     description="Full-catalog baseline search and evaluation service",
 )
+
+
+def _agent_artifact_root() -> Path | None:
+    configured = os.environ.get("SEARCH_AGENT_ARTIFACT_ROOT")
+    if not configured:
+        return None
+    requested = Path(configured)
+    if not requested.is_absolute():
+        raise RuntimeError("configured strategy artifact root is invalid")
+    try:
+        resolved = requested.resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError("configured strategy artifact root is unavailable") from exc
+    if not resolved.is_dir():
+        raise RuntimeError("configured strategy artifact root is unavailable")
+    return resolved
+
+
+def _api_code_revision(project_root: Path) -> str:
+    configured = os.environ.get("SEARCH_CODE_REVISION")
+    if not configured:
+        return require_clean_code_revision(project_root)
+    if not CODE_REVISION_PATTERN.fullmatch(configured):
+        raise RuntimeError("configured code revision is invalid")
+    return configured
+
+
+def _cached_agent_strategy_proposal(*, profile_id: Literal["smoke"]) -> dict:
+    artifact_root = _agent_artifact_root()
+    configured_revision = os.environ.get("SEARCH_CODE_REVISION")
+    if not configured_revision:
+        return generate_strategy_proposal(
+            project_root=PROJECT_ROOT,
+            artifact_root=artifact_root,
+            profile_id=profile_id,
+        )
+    revision = _api_code_revision(PROJECT_ROOT)
+    cache_key = (profile_id, revision, str(artifact_root))
+    with _AGENT_PROPOSAL_LOCK:
+        cached = _AGENT_PROPOSAL_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+        proposal = generate_strategy_proposal(
+            project_root=PROJECT_ROOT,
+            artifact_root=artifact_root,
+            profile_id=profile_id,
+            revision_provider=lambda _root: revision,
+        )
+        _AGENT_PROPOSAL_CACHE[cache_key] = proposal
+        return proposal
+
+
+def _is_local_owner_request(request: Request) -> bool:
+    forwarded = any(
+        request.headers.get(name)
+        for name in ("forwarded", "x-forwarded-for", "x-real-ip")
+    )
+    client_host = request.client.host if request.client is not None else ""
+    return not forwarded and client_host in {"127.0.0.1", "::1"}
+
 
 # The production portfolio uses a same-origin Nginx proxy. These two origins are
 # only for local visual QA when the static site and API run on separate ports.
@@ -267,10 +334,7 @@ def agent_strategy_propose(request: StrategyProposalRequest) -> dict:
     """Run the smoke Agent optimization workflow and return a proposal panel."""
 
     try:
-        return generate_strategy_proposal(
-            project_root=Path(__file__).resolve().parents[2],
-            profile_id=request.profile,
-        )
+        return _cached_agent_strategy_proposal(profile_id=request.profile)
     except ValueError as exc:
         logger.debug(
             "agent_strategy_proposal_rejected",
@@ -308,7 +372,10 @@ def agent_strategy_catalog() -> dict:
     """Return approved strategies visible to the portfolio strategy platform."""
 
     try:
-        return load_strategy_catalog(project_root=Path(__file__).resolve().parents[2])
+        return load_strategy_catalog(
+            project_root=PROJECT_ROOT,
+            artifact_root=_agent_artifact_root(),
+        )
     except (OSError, RuntimeError, ValueError) as exc:
         trace_id = current_trace_id()
         logger.error(
@@ -329,14 +396,26 @@ def agent_strategy_catalog() -> dict:
 
 
 @app.post("/agent/strategy/decision")
-def agent_strategy_decision(request: StrategyDecisionRequest) -> dict:
-    """Record a human strategy decision and apply approved configs."""
+def agent_strategy_decision(request: Request, payload: StrategyDecisionRequest) -> dict:
+    """Record a decision only from the server's loopback owner channel."""
+
+    if not _is_local_owner_request(request):
+        logger.warning("agent_strategy_decision_forbidden")
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "not_found",
+                "message": "Resource not found",
+                "trace_id": current_trace_id(),
+            },
+        )
 
     try:
         return apply_strategy_decision(
-            project_root=Path(__file__).resolve().parents[2],
-            proposal_id=request.proposal_id,
-            decision=request.decision,
+            project_root=PROJECT_ROOT,
+            artifact_root=_agent_artifact_root(),
+            proposal_id=payload.proposal_id,
+            decision=payload.decision,
         )
     except ValueError as exc:
         logger.debug(

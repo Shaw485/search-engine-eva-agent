@@ -125,7 +125,9 @@ and atomically installed at the operator-selected output path.
 
 Comparison JSON and Markdown are evidence artifacts, not sanitized logs. They
 intentionally contain raw Query text, product IDs, labels, scores and full
-ranking differences. `runs/` is Git-ignored; review artifacts before sharing,
+ranking differences. Local development uses Git-ignored `runs/`; production
+strategy artifacts use the private `SEARCH_AGENT_ARTIFACT_ROOT` directory.
+Review artifacts before sharing,
 and never commit or upload a private/user-Query Run without a separate privacy
 review. Content-addressed IDs detect content changes but are not signatures or
 proof of which program produced a ranking.
@@ -145,10 +147,12 @@ provider prompts/responses or exception messages. `agent_runtime`,
 `agent_model`, `agent_tools`, `agent_trace` and `agent_replay` can each be
 enabled without enabling the others.
 
-Strategy proposal events use the `agent_optimization` module. They include safe
-proposal, Run and comparison IDs, profile ID, candidate Ranker ID, strategy
+Strategy proposal events use the independently controlled `agent_optimization`
+module. Production enables it at `INFO` while keeping ranking diagnostics off.
+They include safe proposal, Run and comparison IDs, profile ID, candidate Ranker ID, strategy
 count and stable error codes. Raw Query text, product titles, labels and ranked
-lists stay in ignored evidence artifacts under `runs/`, not in diagnostics.
+lists stay in evidence artifacts under local `runs/` or the configured
+production runtime directory, not in diagnostics.
 
 ## Privacy and public errors
 
@@ -220,8 +224,10 @@ systemd-analyze cat-config systemd/journald.conf
     or report-validation failures during offline Replay.
 11. `agent_optimization`: enable only `agent_optimization=INFO` while calling
     `/agent/strategy/propose`, `/agent/strategy/decision` or
-    `/agent/strategy/catalog`; inspect `runs/strategy-proposals/`,
-    `runs/strategy-decisions/` and `runs/search-strategies/` for evidence.
+    `/agent/strategy/catalog`; locally inspect `runs/strategy-proposals/`,
+    `runs/strategy-decisions/` and `runs/search-strategies/`. In production,
+    inspect the corresponding subdirectories below
+    `/var/lib/search-engine-eva-agent/runtime/` as an authorized operator.
 
 `tests/test_observability.py` and `tests/test_catalog_search.py` verify JSON structure, module isolation,
 redaction variants, error classification, stable events, low-noise defaults and

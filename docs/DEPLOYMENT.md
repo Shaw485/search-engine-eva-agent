@@ -14,9 +14,9 @@ Nginx /search-eval-api/* (same HTTPS origin, access log off)
           |
           v
 Uvicorn 127.0.0.1:8010 (www-data)
+          |-- read-only --> /var/lib/search-engine-eva-agent/catalog-baseline-v1.sqlite3
           |
-          v
-/var/lib/search-engine-eva-agent/catalog-baseline-v1.sqlite3
+          `-- read/write -> /var/lib/search-engine-eva-agent/runtime/
 ```
 
 The source Parquet and built index are not stored in Git. Build the verified
@@ -55,12 +55,21 @@ sudo python3 -m venv /var/www/search-engine-eva-agent/.venv
 sudo /var/www/search-engine-eva-agent/.venv/bin/pip install -r /var/www/search-engine-eva-agent/requirements-dev.lock
 sudo /var/www/search-engine-eva-agent/.venv/bin/pip install --no-build-isolation --no-deps -e /var/www/search-engine-eva-agent
 sudo install -d -o root -g www-data -m 0750 /var/lib/search-engine-eva-agent
+sudo install -d -o www-data -g www-data -m 0750 /var/lib/search-engine-eva-agent/runtime
+test -z "$(sudo git -C /var/www/search-engine-eva-agent status --porcelain)"
+code_revision="$(sudo git -C /var/www/search-engine-eva-agent rev-parse HEAD)"
+printf '%s\n' "$code_revision" | grep -Eq '^[0-9a-f]{40}$'
+printf 'SEARCH_CODE_REVISION=%s\n' "$code_revision" | sudo tee /etc/search-engine-eva-agent.env >/dev/null
+sudo chown root:root /etc/search-engine-eva-agent.env
+sudo chmod 0600 /etc/search-engine-eva-agent.env
 sudo cp /var/www/search-engine-eva-agent/deploy/search-engine-eva-agent.service /etc/systemd/system/
 sudo systemctl daemon-reload
 ```
 
-Add `deploy/nginx-search-eval.conf` inside the existing HTTPS server block, then
-run `sudo nginx -t` before `sudo systemctl reload nginx`.
+Add both location blocks from `deploy/nginx-search-eval.conf` inside the
+existing HTTPS server block, then run `sudo nginx -t` before
+`sudo systemctl reload nginx`. The exact decision location deliberately returns
+404 publicly; human decisions are owner-only and must use the loopback API.
 
 ## Install or replace the index
 
@@ -85,8 +94,21 @@ the previous index can be reinstalled if verification fails.
 
 ```bash
 sudo git -C /var/www/search-engine-eva-agent pull --ff-only
+test -z "$(sudo git -C /var/www/search-engine-eva-agent status --porcelain)"
+code_revision="$(sudo git -C /var/www/search-engine-eva-agent rev-parse HEAD)"
+printf '%s\n' "$code_revision" | grep -Eq '^[0-9a-f]{40}$'
+printf 'SEARCH_CODE_REVISION=%s\n' "$code_revision" | sudo tee /etc/search-engine-eva-agent.env >/dev/null
+sudo chown root:root /etc/search-engine-eva-agent.env
+sudo chmod 0600 /etc/search-engine-eva-agent.env
+sudo install -d -o www-data -g www-data -m 0750 /var/lib/search-engine-eva-agent/runtime
 sudo /var/www/search-engine-eva-agent/.venv/bin/pip install --no-build-isolation --no-deps -e /var/www/search-engine-eva-agent
+sudo install -o root -g root -m 0644 \
+  /var/www/search-engine-eva-agent/deploy/search-engine-eva-agent.service \
+  /etc/systemd/system/search-engine-eva-agent.service
+sudo systemd-analyze verify /etc/systemd/system/search-engine-eva-agent.service
+sudo systemctl daemon-reload
 sudo systemctl restart search-engine-eva-agent
+sudo systemctl is-active search-engine-eva-agent
 curl http://127.0.0.1:8010/health
 curl --request POST 'https://shawspace.cn/search-eval-api/catalog/search' \
   --header 'Content-Type: application/json' \
@@ -95,6 +117,13 @@ curl --request POST 'https://shawspace.cn/search-eval-api/agent/strategy/propose
   --header 'Content-Type: application/json' \
   --data '{"profile":"smoke"}'
 curl 'https://shawspace.cn/search-eval-api/agent/strategy/catalog'
+curl --output /dev/null --write-out '%{http_code}\n' \
+  --request POST 'https://shawspace.cn/search-eval-api/agent/strategy/decision' \
+  --header 'Content-Type: application/json' \
+  --data '{"proposal_id":"proposal-000000000000","decision":"reject"}'
+sudo -u www-data test -w /var/lib/search-engine-eva-agent/runtime
+sudo -u www-data test ! -w /var/www/search-engine-eva-agent
+test -z "$(sudo git -C /var/www/search-engine-eva-agent status --porcelain)"
 ```
 
 Acceptance requires:
@@ -106,9 +135,24 @@ Acceptance requires:
    examples.
 4. The strategy catalog endpoint returns the current approved runtime strategy
    list. It can be empty before the Owner approves a proposal.
-5. The website renders full-catalog results in the left lane.
-6. The optimized lane is still visibly unsupported.
-7. A failed Query can be correlated by `X-Request-ID` without Query text in logs.
+5. The public decision check returns `404`; only a deliberate loopback request
+   from the server can approve or reject a proposal.
+6. The source checkout remains clean and unwritable to `www-data`, while only
+   the dedicated runtime directory is writable.
+7. The website renders full-catalog results in the left lane.
+8. The optimized lane is still visibly unsupported.
+9. A failed Query can be correlated by `X-Request-ID` without Query text in logs.
+
+Proposal, comparison and decision JSON under the runtime directory are evidence
+artifacts rather than logs. They can contain Query and product examples. Keep
+the directory private (`0750`), monitor its size, back it up only when evidence
+must be retained, and review artifacts before export. Do not delete a proposal
+that has an associated human decision.
+
+To record an intentional human decision, sign in to the server and call
+`http://127.0.0.1:8010/agent/strategy/decision` directly with the reviewed
+proposal ID. This mutates the strategy catalog, so it is not part of automated
+deployment verification.
 
 Use a response request ID to inspect safe diagnostics:
 
