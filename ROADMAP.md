@@ -117,8 +117,8 @@ Owner 决定先在现有 `shawspace.cn` 搜索体验页搜索全部 1,814,924 �
 | 4. Agent Runtime Harness | 状态机、权限、预算、Trace、Replay | Agent 可控、可恢复、可复现 | **In Progress: local scaffold only** |
 | 5. Agent Evaluation Harness | 黄金任务集和 Agent 成绩单 | 证明 Agent 不是偶然成功 | **Not Started** |
 | 6. 搜索策略与诊断实验室 | Multi-field BM25、Vector、Hybrid、Rerank、Bad Case | Agent 获得更多可组合实验工具 | **Not Started** |
-| 7. 诊断与优化 Agent | 自动发现 Bad Case、提出策略、运行受控实验并请求审批 | 完整的搜索评测与优化 Agent | **In Progress: smoke-only exact-boost proposal loop** |
-| 8. Web Agent 工作台与交付 | Agent 工作台、审批面板、搜索对比页、部署与作品集 | 用户可观察计划、工具、证据、Replay 和策略审批 | **In Progress: API-backed approval panel slice** |
+| 7. 诊断与优化 Agent | 自动发现 Bad Case、提出策略、运行受控实验并请求审批 | 完整的搜索评测与优化 Agent | **In Progress: smoke diagnosis + bounded multi-candidate exact-boost search** |
+| 8. Web Agent 工作台与交付 | Agent 工作台、审批面板、搜索对比页、部署与作品集 | 用户可观察计划、工具、证据、Replay 和策略审批 | **In Progress: API-backed analysis/experiment/gate panel** |
 
 与 v0.1 相比，Agent MVP 从原阶段 5 前移到阶段 3；Trace、Replay 和 Agent Eval 也前移。向量与 Rerank 不再是 Agent 出现之前的前置条件。
 

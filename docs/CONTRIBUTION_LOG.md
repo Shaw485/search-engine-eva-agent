@@ -51,6 +51,7 @@
 | D-018 | 为当前 Agent Runtime 增加视觉化流程说明，帮助 Owner 区分搜索系统、搜索评测和 Agent 控制闭环 | **Owner 主动提出**：“把agent可视化，我不太懂目前的流程” | **Codex 提出文档落点和流程图结构** | Owner 提出学习需求；Codex 在不解锁 dev、不改变搜索结果的边界内执行 | Codex 新增 `docs/AGENT_FLOW.md`，并从 README、Runtime guide、Roadmap 链接；该文档是学习与讲解材料，不是代码能力声明 | Owner-originated learning/product communication need + Codex documentation implementation |
 | D-019 | 最终 Agent 不能只是被动比较两个 Run；它必须主动搜索/抽样发现 Bad Case、提出候选优化、调用 Harness 比较，并通过审批面板让人点击更新或拒绝；批准后系统自动应用版本化策略并验证 | **Owner 主动提出并纠偏**：“你去判断或者构思或者自己去实际搜索，看看badcase，然后提出优化。然后用harness比较……人只需要点更新策略，或者拒绝策略” | Owner 定义目标产品行为；Codex 将其整理为 approval-gated optimization workflow 和阶段交付 | **Owner** 定义方向与审批交互；Codex 负责具体架构拆解和后续实现 | Codex 新增 `docs/AGENT_OPTIMIZATION_WORKFLOW.md`，更新 `ROADMAP.md`、`AGENT_FLOW.md`、README 与学习记录；当前是方向与规格更新，尚未完成代码实现 | Owner-originated product decision + Codex specification implementation |
 | D-020 | Agent 工作台必须接真实后端：点开始后后台跑 smoke Harness、找 Bad Case、提出候选策略、返回指标与样本证据；Owner 点击更新/拒绝，批准后策略进入策略平台 | **Owner 主动提出并明确反对“只是预览”** | Owner 定义交互和审批边界；**Codex 设计并实现** API-first smoke-only proposal/decision/catalog 闭环与首个 exact-boost 候选策略 | **Owner** 决定产品体验必须闭环；Codex 选择 `candidate-title-bm25-exact-boost-v1` 作为首个受控候选策略并实现 | Codex 实现后端 proposal/decision/catalog、策略目录、前端工作台 API 接入、策略平台读取、模块化诊断与测试；当前仍是 smoke-only，不解锁 dev/test，也不声称生产优化 | Owner-originated product requirement + Codex technical design/implementation |
+| D-021 | Agent 的分析、提案和对比必须升级为复杂但可控的优化策略，并允许后续用算法或模型增强；模型不得获得 Codex/平台私钥，必须由服务端 Owner 凭据或本地模型接入 | **Owner 主动提出**：“agent的分析，提案，对比。这应该是很复杂的策略”；并表示愿意提供模型额度方向 | Owner 定义“更强优化 Agent”目标；**Codex 设计**“诊断→有界候选→Harness→回归门禁→审批”架构、模型/密钥安全边界和首版工程默认门禁 | Owner 决定继续建设复杂优化 Agent；尚未独立选择模型、费用预算或正式门禁阈值。当前工程默认阈值不冒充 Owner 产品政策 | Codex 实现 smoke 根因诊断、参数化 exact-boost、多候选实验、透明相对选择分、七项可信门禁、Run/Comparison 重验、完整 active revision 检查、跨进程审批锁和工作台可视化；批准后下一轮以 active 策略为基线。未使用或提交任何 API Key | Owner-originated product direction + Codex technical design/implementation; model/provider policy pending Owner decision |
 
 ### 尚未拍板的提案
 
@@ -72,6 +73,9 @@
   Harness 验证、人工审批后自动更新”的优化 Agent。
 - 明确要求 Agent 工作台不能只是预览，必须接后端并完成“开始分析—提案—审批—
   策略平台更新”的产品闭环。
+- 要求把 Agent 的分析、提案和对比升级为更复杂的优化策略，并愿意在安全
+  边界内引入算法或模型；这定义了能力方向，不等于 Owner 已选择具体模型、
+  参数搜索算法、费用预算或发布门禁阈值。
 - 定义作品集入口和搜索体验页的关键交互、信息取舍，并通过实际页面反馈推动修正。
 - 定义软件必须具备模块化日志、独立排障、脱敏、生产降噪和保留说明等质量要求。
 - 保留关键政策的最终拍板权；目前明确批准了 `esci-primary-v1` 相关性政策。
@@ -90,6 +94,9 @@
   确定性 Planner、状态/预算/权限、Trace/Replay、模块化日志与安全测试。
 - 将 Owner 的主动优化 Agent 方向拆成 strategy proposal、Harness comparison、
   approval panel 和 versioned strategy update 的后续实施路线。
+- 将固定单候选提案升级为确定性根因诊断、有界参数候选搜索、透明相对选择分、
+  七项可信发布门禁、证据重验、active revision/CAS 和连续迭代基线，并设计
+  模型 Provider 的密钥、预算与权限边界。
 - 运行自动测试、数据校验和 smoke 实验，并把证据写入报告和 Git commits。
 - 讲解搜索原理、提示关键知识，并维护学习检查点和本归因台账。
 

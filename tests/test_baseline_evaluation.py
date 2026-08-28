@@ -193,6 +193,63 @@ def test_random_seed_is_recorded_and_changes_run_identity() -> None:
     assert first["run_id"] != second["run_id"]
 
 
+def test_exact_boost_options_are_bounded_recorded_and_change_run_identity() -> None:
+    policy = RelevancePolicy.from_path(POLICY_PATH)
+    profile = _smoke_profile()
+    conservative = run_candidate_baseline(
+        profile,
+        policy=policy,
+        code_revision="a" * 40,
+        ranker_name="title-bm25-exact-boost",
+        ranker_options={
+            "coverage_boost": 0.4,
+            "numeric_boost": 0.6,
+            "phrase_boost": 0.6,
+        },
+    )
+    aggressive = run_candidate_baseline(
+        profile,
+        policy=policy,
+        code_revision="a" * 40,
+        ranker_name="title-bm25-exact-boost",
+        ranker_options={
+            "coverage_boost": 1.2,
+            "numeric_boost": 1.6,
+            "phrase_boost": 1.8,
+        },
+    )
+
+    assert conservative["ranker"]["coverage_boost"] == 0.4
+    assert conservative["ranker"]["numeric_boost"] == 0.6
+    assert conservative["ranker"]["phrase_boost"] == 0.6
+    assert conservative["run_id"] != aggressive["run_id"]
+
+
+@pytest.mark.parametrize(
+    ("ranker_name", "ranker_options", "message"),
+    [
+        ("title-bm25", {"coverage_boost": 0.2}, "supported only"),
+        ("title-bm25-exact-boost", {"unknown": 0.2}, "unsupported"),
+        ("title-bm25-exact-boost", {"phrase_boost": 3.1}, "between"),
+        ("title-bm25-exact-boost", {"phrase_boost": float("nan")}, "finite"),
+        ("title-bm25-exact-boost", {"phrase_boost": True}, "finite"),
+    ],
+)
+def test_harness_rejects_unbounded_ranker_options(
+    ranker_name: str,
+    ranker_options: dict[str, float],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        run_candidate_baseline(
+            _smoke_profile(),
+            policy=RelevancePolicy.from_path(POLICY_PATH),
+            code_revision="a" * 40,
+            ranker_name=ranker_name,
+            ranker_options=ranker_options,
+        )
+
+
 def test_evaluation_logs_trace_run_and_metrics_without_query_text() -> None:
     stream = io.StringIO()
     configure_logging(

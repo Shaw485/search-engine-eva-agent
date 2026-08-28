@@ -18,6 +18,8 @@ from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse
 
 from search_quality.agent.optimization import (
+    ActiveStrategyChangedError,
+    StrategyProposalRejectedError,
     apply_strategy_decision,
     generate_strategy_proposal,
     load_strategy_catalog,
@@ -42,7 +44,7 @@ logger = logging.getLogger("search_quality.api")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CODE_REVISION_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
 _AGENT_PROPOSAL_LOCK = threading.Lock()
-_AGENT_PROPOSAL_CACHE: dict[tuple[str, str, str], dict] = {}
+_AGENT_PROPOSAL_CACHE: dict[tuple[str, str, str, str], dict] = {}
 
 app = FastAPI(
     title="Search Engine EVA Agent",
@@ -80,25 +82,74 @@ def _cached_agent_strategy_proposal(*, profile_id: Literal["smoke"]) -> dict:
     artifact_root = _agent_artifact_root()
     configured_revision = os.environ.get("SEARCH_CODE_REVISION")
     if not configured_revision:
-        return generate_strategy_proposal(
-            project_root=PROJECT_ROOT,
-            artifact_root=artifact_root,
-            profile_id=profile_id,
+        for _attempt in range(2):
+            try:
+                return generate_strategy_proposal(
+                    project_root=PROJECT_ROOT,
+                    artifact_root=artifact_root,
+                    profile_id=profile_id,
+                )
+            except ActiveStrategyChangedError:
+                logger.info(
+                    "agent_strategy_proposal_parent_changed",
+                    extra={"profile_id": profile_id},
+                )
+        raise RuntimeError(
+            "active strategy changed repeatedly during proposal generation"
         )
     revision = _api_code_revision(PROJECT_ROOT)
-    cache_key = (profile_id, revision, str(artifact_root))
-    with _AGENT_PROPOSAL_LOCK:
-        cached = _AGENT_PROPOSAL_CACHE.get(cache_key)
-        if cached is not None:
-            return cached
-        proposal = generate_strategy_proposal(
-            project_root=PROJECT_ROOT,
-            artifact_root=artifact_root,
-            profile_id=profile_id,
-            revision_provider=lambda _root: revision,
-        )
-        _AGENT_PROPOSAL_CACHE[cache_key] = proposal
-        return proposal
+    for _attempt in range(2):
+        with _AGENT_PROPOSAL_LOCK:
+            parent_revision = load_strategy_catalog(
+                project_root=PROJECT_ROOT,
+                artifact_root=artifact_root,
+            ).get("active_revision")
+            cache_key = (
+                profile_id,
+                revision,
+                str(artifact_root),
+                str(parent_revision or "none"),
+            )
+            cached = _AGENT_PROPOSAL_CACHE.get(cache_key)
+            if cached is not None:
+                logger.debug(
+                    "agent_strategy_proposal_cache_hit",
+                    extra={"profile_id": profile_id},
+                )
+                return cached
+            logger.debug(
+                "agent_strategy_proposal_cache_miss",
+                extra={"profile_id": profile_id},
+            )
+            try:
+                proposal = generate_strategy_proposal(
+                    project_root=PROJECT_ROOT,
+                    artifact_root=artifact_root,
+                    profile_id=profile_id,
+                    revision_provider=lambda _root: revision,
+                )
+            except ActiveStrategyChangedError:
+                logger.info(
+                    "agent_strategy_proposal_parent_changed",
+                    extra={"profile_id": profile_id},
+                )
+                continue
+            current_revision = load_strategy_catalog(
+                project_root=PROJECT_ROOT,
+                artifact_root=artifact_root,
+            ).get("active_revision")
+            if (
+                proposal.get("parent_active_strategy_revision") != parent_revision
+                or current_revision != parent_revision
+            ):
+                logger.info(
+                    "agent_strategy_proposal_parent_changed",
+                    extra={"profile_id": profile_id},
+                )
+                continue
+            _AGENT_PROPOSAL_CACHE[cache_key] = proposal
+            return proposal
+    raise RuntimeError("active strategy changed repeatedly during proposal generation")
 
 
 def _is_local_owner_request(request: Request) -> bool:
@@ -335,7 +386,7 @@ def agent_strategy_propose(request: StrategyProposalRequest) -> dict:
 
     try:
         return _cached_agent_strategy_proposal(profile_id=request.profile)
-    except ValueError as exc:
+    except StrategyProposalRejectedError as exc:
         logger.debug(
             "agent_strategy_proposal_rejected",
             extra={"error_code": classify_error(exc)},
@@ -348,7 +399,7 @@ def agent_strategy_propose(request: StrategyProposalRequest) -> dict:
                 "trace_id": current_trace_id(),
             },
         ) from exc
-    except (OSError, RuntimeError) as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         trace_id = current_trace_id()
         logger.error(
             "agent_strategy_proposal_failed",
@@ -411,12 +462,16 @@ def agent_strategy_decision(request: Request, payload: StrategyDecisionRequest) 
         )
 
     try:
-        return apply_strategy_decision(
+        result = apply_strategy_decision(
             project_root=PROJECT_ROOT,
             artifact_root=_agent_artifact_root(),
             proposal_id=payload.proposal_id,
             decision=payload.decision,
         )
+        with _AGENT_PROPOSAL_LOCK:
+            _AGENT_PROPOSAL_CACHE.clear()
+        logger.debug("agent_strategy_proposal_cache_cleared")
+        return result
     except ValueError as exc:
         logger.debug(
             "agent_strategy_decision_rejected",

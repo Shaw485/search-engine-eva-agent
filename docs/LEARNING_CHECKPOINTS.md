@@ -88,6 +88,24 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
   是产品方向说明，不等于 Owner 已完成全部自动化边界学习验证。
 - 状态：**Explanation delivered; independent verification pending**
 
+## 当前插入知识：模型不是 Harness，也不能拿走发布权
+
+【必学知识提醒】
+
+- 当前知识：模型适合归纳 Bad Case 和提出可证伪假设；真正的指标必须由
+  确定性 Harness 重算，发布仍受固定门禁与人工审批控制。
+- 为什么现在必须理解：否则容易把“模型说这个策略更好”误当实验结果，或
+  把 API Key、评测标签和生产修改权限都交给一个不可验证的输出端。
+- 最低掌握范围：能区分三层：模型/规则提出候选，Harness 产生事实，Owner
+  决定业务取舍；能说明密钥为什么只能保存在服务端 Secret 中。
+- 具体例子：本轮 coverage 候选的平均 nDCG@10 增益更高，但 Query 回归比例
+  超过工程默认门禁，因此优化器选择增益较小的 conservative 候选。这个选择
+  来自可复算指标和门禁，不是模型偏好。
+- 验证证据：2026-08-28 已实现 `strategy_search.py` 并新增
+  `docs/AGENT_OPTIMIZATION_STRATEGY.md`；Owner 尚未独立选择正式门禁阈值或
+  模型预算，因此不能把这些工程默认值写成 Owner 原创政策。
+- 状态：**Explanation delivered; independent verification pending**
+
 ## 检查点记录
 
 完成一个检查点后，在这里追加简短记录：

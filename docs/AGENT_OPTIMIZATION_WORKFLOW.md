@@ -1,9 +1,10 @@
 # Agent optimization workflow
 
 > Status: product direction adopted from Owner feedback on 2026-08-28. This
-> document defines the target loop. The first smoke-only backend loop now
-> exposes proposal, decision and strategy-catalog APIs; richer bad-case search,
-> dev evaluation and LLM planning remain future milestones.
+> document defines the target loop. The smoke-only backend now performs a first
+> deterministic diagnosis and bounded multi-candidate exact-boost search before
+> exposing proposal, decision and strategy-catalog APIs. Query construction,
+> dev evaluation, Runtime integration and LLM planning remain future milestones.
 
 ## Target product behavior
 
@@ -87,15 +88,18 @@ server's direct loopback owner channel until real owner authentication exists:
 
 ```text
 POST /agent/strategy/propose
-  -> finds worst smoke bad cases from the title-BM25 baseline
-  -> tests title-BM25 plus exact coverage/model/phrase boosts
-  -> runs baseline and candidate on the same smoke data
-  -> compares Runs
+  -> scans smoke baseline evidence for numeric, coverage, phrase and missing-title signals
+  -> selects up to four allowlisted exact-boost parameter candidates
+  -> runs every non-duplicate candidate and compares it with the current active baseline
+  -> applies seven nDCG/MRR/Success and Query-regression gates
+  -> chooses only among gate-passing candidates
   -> writes a StrategyProposal artifact under the configured artifact root
 
 POST /agent/strategy/decision
   -> owner-only; records approve/reject under strategy-decisions/
-  -> approve writes search-strategies/catalog.json and active.json
+  -> approve reloads Runs, rebuilds Comparison and recomputes trusted gates
+  -> verifies the complete parent strategy revision under a cross-process lock
+  -> writes search-strategies/catalog.json and active.json
 
 GET /agent/strategy/catalog
   -> returns approved strategies for the portfolio strategy platform
@@ -117,11 +121,21 @@ The artifact should contain:
   immutable artifacts keyed by proposal ID;
 - the active runtime strategy path if approval applied a catalog update.
 
-The current candidate strategy is intentionally simple and explainable:
-`candidate-title-bm25-exact-boost-v1`. It adds deterministic boosts for query
+The current strategy family is intentionally simple and explainable:
+`candidate-title-bm25-exact-boost-v1`. It adds deterministic boosts for Query
 term coverage, numeric/model token matches and exact phrase matches on top of
-title-only BM25. The first smoke evidence shows a small positive nDCG@10 delta,
-but it is not a production rollout decision and does not unlock dev/test.
+title-only BM25. The first bounded search selects `exact-conservative-v1`
+because the stronger coverage candidate gains more average nDCG@10 but fails
+the provisional Query-regression gates. This is directional smoke evidence,
+not a production rollout decision, and it does not unlock dev/test.
+
+After approval, a later optimizer Run uses the approved exact-boost config as
+its baseline and skips that identical candidate. Catalog activation still does
+not change `/catalog/search`; production validation, authenticated browser
+approval and rollback remain separate future milestones.
+
+The complete design, model boundary and tool inventory are in
+`docs/AGENT_OPTIMIZATION_STRATEGY.md`.
 
 ## Interview-safe explanation
 

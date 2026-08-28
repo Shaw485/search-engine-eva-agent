@@ -8,6 +8,7 @@ import logging
 import math
 import re
 import time
+from collections.abc import Mapping
 from typing import Any
 
 import polars as pl
@@ -56,6 +57,13 @@ _RUN_ID_PREFIXES = {
     "title-bm25": "bm25",
 }
 _GIT_REVISION_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
+_EXACT_BOOST_OPTION_BOUNDS = {
+    "b": (0.0, 1.0),
+    "coverage_boost": (0.0, 3.0),
+    "k1": (0.1, 3.0),
+    "numeric_boost": (0.0, 3.0),
+    "phrase_boost": (0.0, 3.0),
+}
 logger = logging.getLogger("search_quality.evaluation")
 ranking_logger = logging.getLogger("search_quality.ranking")
 
@@ -171,6 +179,7 @@ def _build_ranker(
     ranker_name: str,
     products: list[CandidateProduct],
     *,
+    ranker_options: Mapping[str, float],
     random_seed: int,
 ) -> CandidateRanker:
     if ranker_name == "random":
@@ -180,10 +189,37 @@ def _build_ranker(
     if ranker_name == "title-bm25":
         return CandidateTitleBM25Ranker(products)
     if ranker_name == "title-bm25-exact-boost":
-        return CandidateTitleBM25ExactBoostRanker(products)
+        return CandidateTitleBM25ExactBoostRanker(products, **ranker_options)
     raise ValueError(
         f"unsupported ranker {ranker_name!r}; expected one of {RANKER_NAMES}"
     )
+
+
+def _normalize_ranker_options(
+    ranker_name: str,
+    ranker_options: Mapping[str, float] | None,
+) -> dict[str, float]:
+    if ranker_options is None:
+        return {}
+    if not isinstance(ranker_options, Mapping):
+        raise TypeError("ranker_options must be a mapping")
+    if ranker_name != "title-bm25-exact-boost" and ranker_options:
+        raise ValueError("ranker_options are supported only for title-bm25-exact-boost")
+    unknown = sorted(set(ranker_options) - set(_EXACT_BOOST_OPTION_BOUNDS))
+    if unknown:
+        raise ValueError(f"unsupported ranker options: {unknown}")
+    normalized: dict[str, float] = {}
+    for name, value in ranker_options.items():
+        if type(value) not in (int, float) or not math.isfinite(value):
+            raise ValueError(f"ranker option {name} must be a finite number")
+        minimum, maximum = _EXACT_BOOST_OPTION_BOUNDS[name]
+        numeric_value = float(value)
+        if not minimum <= numeric_value <= maximum:
+            raise ValueError(
+                f"ranker option {name} must be between {minimum} and {maximum}"
+            )
+        normalized[name] = numeric_value
+    return normalized
 
 
 def run_candidate_baseline(
@@ -192,6 +228,7 @@ def run_candidate_baseline(
     policy: RelevancePolicy,
     code_revision: str,
     ranker_name: str,
+    ranker_options: Mapping[str, float] | None = None,
     random_seed: int = DEFAULT_RANDOM_SEED,
 ) -> dict[str, Any]:
     """Evaluate one label-blind Ranker on every judged candidate set."""
@@ -201,6 +238,7 @@ def run_candidate_baseline(
         raise ValueError(
             f"unsupported ranker {ranker_name!r}; expected one of {RANKER_NAMES}"
         )
+    normalized_ranker_options = _normalize_ranker_options(ranker_name, ranker_options)
     path = profile.path
     if not path.is_file():
         raise FileNotFoundError(path)
@@ -247,6 +285,7 @@ def run_candidate_baseline(
             "profile_id": profile.profile_id,
             "query_count": queries,
             "ranker_name": ranker_name,
+            "ranker_option_count": len(normalized_ranker_options),
         },
     )
 
@@ -282,6 +321,7 @@ def run_candidate_baseline(
         ranker = _build_ranker(
             ranker_name,
             candidate_products,
+            ranker_options=normalized_ranker_options,
             random_seed=random_seed,
         )
         observed_ranker_config = dict(ranker.config)

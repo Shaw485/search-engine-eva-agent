@@ -31,8 +31,12 @@ the 8,956-Query frozen test remains unavailable to tuning runs.
 A smoke-only Stage 3/4 scaffold now exposes strictly typed evaluation tools
 through a finite Runtime, branches on comparison observations, stores an
 offline-replayable Trace, and has an API-first strategy proposal loop for the
-portfolio Agent workbench. The first proposal loop tests
-`candidate-title-bm25-exact-boost-v1` against the title-BM25 baseline and writes
+portfolio Agent workbench. The proposal loop now diagnoses title-ranking
+failure signals, selects a bounded set of exact-boost parameter candidates,
+runs each candidate against the current active baseline, and applies explicit
+aggregate and Query-regression gates before choosing one proposal. The first
+round starts from title BM25; after approval, the next round uses the approved
+strategy and skips duplicate candidates. It writes
 approve/reject decisions plus approved runtime strategies under ignored
 `runs/` locally or a private production artifact root. The public workbench can
 request and inspect proposals; approve/reject remains restricted to the server's
@@ -56,6 +60,7 @@ explicit pending integration check, not an implicit fallback or a claimed pass.
 - Agent Runtime guide: [docs/AGENT_RUNTIME.md](docs/AGENT_RUNTIME.md)
 - Agent flow visual guide: [docs/AGENT_FLOW.md](docs/AGENT_FLOW.md)
 - Agent optimization workflow: [docs/AGENT_OPTIMIZATION_WORKFLOW.md](docs/AGENT_OPTIMIZATION_WORKFLOW.md)
+- Agent optimization strategy: [docs/AGENT_OPTIMIZATION_STRATEGY.md](docs/AGENT_OPTIMIZATION_STRATEGY.md)
 - Agent Runtime decision: [docs/adr/003-agent-runtime-mvp.md](docs/adr/003-agent-runtime-mvp.md)
 - Required learning: [docs/LEARNING_CHECKPOINTS.md](docs/LEARNING_CHECKPOINTS.md)
 - Decision and contribution provenance: [docs/CONTRIBUTION_LOG.md](docs/CONTRIBUTION_LOG.md)

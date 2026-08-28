@@ -147,12 +147,36 @@ provider prompts/responses or exception messages. `agent_runtime`,
 `agent_model`, `agent_tools`, `agent_trace` and `agent_replay` can each be
 enabled without enabling the others.
 
-Strategy proposal events use the independently controlled `agent_optimization`
-module. Production enables it at `INFO` while keeping ranking diagnostics off.
-They include safe proposal, Run and comparison IDs, profile ID, candidate Ranker ID, strategy
-count and stable error codes. Raw Query text, product titles, labels and ranked
-lists stay in evidence artifacts under local `runs/` or the configured
-production runtime directory, not in diagnostics.
+Strategy proposal and bounded-search events use the independently controlled
+`agent_optimization` module. Production enables it at `INFO` while keeping
+ranking diagnostics off. The lifecycle includes `bad_case_diagnosed`,
+`strategy_candidates_selected`, `strategy_comparison_scored` and
+`strategy_winner_selected` between proposal start/completion. Events include
+safe diagnosis/proposal/Run/comparison/evaluation IDs, profile ID, counts, gate
+status and stable error codes. Raw Query text, product titles, labels, parameter
+payloads and ranked lists stay in evidence artifacts under local `runs/` or the
+configured production runtime directory, not in diagnostics.
+
+The API also emits `agent_strategy_proposal_cache_hit`,
+`agent_strategy_proposal_cache_miss`,
+`agent_strategy_proposal_parent_changed` and
+`agent_strategy_proposal_cache_cleared`. These contain only the profile and
+event state; active config bodies, Query text and evidence payloads are not
+logged. `strategy_candidate_skipped` records only the allowlisted candidate ID
+and a stable reason when a candidate exactly matches the active baseline.
+`legacy_active_strategy_migrated` is emitted once when the optimizer recognizes
+the exact fixed-shape v1 active strategy and, under the strategy decision lock,
+atomically adds its missing config hash before reuse. It contains only the
+schema version and allowlisted strategy ID; config values and evidence bodies
+are deliberately omitted. A missing hash on any non-v1 shape, or a mismatched
+hash on any newer artifact, remains a hard failure.
+Decision replay after an interrupted write emits
+`strategy_decision_recovery_detected` with only the proposal ID and decision;
+the durable intent, strategy body and evidence remain private artifacts. An
+explicit unsupported proposal request is a debug-level
+`agent_strategy_proposal_rejected` event and HTTP 400. Artifact, I/O and
+contract failures—including unexpected `ValueError`—emit the privacy-safe
+ERROR event `agent_strategy_proposal_failed` and return a generic HTTP 503.
 
 ## Privacy and public errors
 
