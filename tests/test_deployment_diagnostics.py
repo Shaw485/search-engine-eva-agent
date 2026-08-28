@@ -43,6 +43,7 @@ def test_agent_page_and_analysis_endpoints_require_basic_auth() -> None:
     query_constructor = _nginx_location(
         nginx, "= /search-eval-api/agent/query-constructor/build"
     )
+    bad_cases = _nginx_location(nginx, "= /search-eval-api/agent/bad-cases/run")
 
     assert 'auth_basic "Search Agent";' in agent_page
     assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in agent_page
@@ -77,6 +78,13 @@ def test_agent_page_and_analysis_endpoints_require_basic_auth() -> None:
     assert 'proxy_set_header Authorization "";' in query_constructor
     assert "proxy_read_timeout 15s;" in query_constructor
 
+    assert 'auth_basic "Search Agent";' in bad_cases
+    assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in bad_cases
+    assert "proxy_pass http://127.0.0.1:8010/agent/bad-cases/run;" in bad_cases
+    assert 'proxy_set_header Authorization "";' in bad_cases
+    assert "proxy_read_timeout 130s;" in bad_cases
+    assert 'add_header Cache-Control "no-store" always;' in bad_cases
+
 
 def test_catalog_artifact_is_read_only_and_configured_for_service_user() -> None:
     service = (ROOT / "deploy/search-engine-eva-agent.service").read_text(
@@ -104,6 +112,7 @@ def test_agent_runtime_store_is_the_only_writable_service_path() -> None:
     assert f"Environment=SEARCH_AGENT_ARTIFACT_ROOT={runtime}" in service
     assert "Environment=SEARCH_LOG_LEVEL_AGENT_OPTIMIZATION=INFO" in service
     assert "Environment=SEARCH_LOG_LEVEL_AGENT_EVAL=INFO" in service
+    assert "Environment=SEARCH_LOG_LEVEL_BAD_CASE=INFO" in service
     assert "Environment=SEARCH_LOG_LEVEL_RETRIEVAL=INFO" in service
     assert "Environment=SEARCH_LOG_LEVEL_RETRIEVAL_ANALYSIS=INFO" in service
     assert "Environment=SEARCH_LOG_LEVEL_STAGE_DIAGNOSIS=INFO" in service

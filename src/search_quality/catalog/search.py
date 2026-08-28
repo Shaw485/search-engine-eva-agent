@@ -24,6 +24,18 @@ class InvalidCatalogQuery(ValueError):
     """The caller supplied a Query outside the public search contract."""
 
 
+class CatalogBatchSearchFailed(RuntimeError):
+    """A batch stopped after a safe number of completed Query calls."""
+
+    def __init__(self, message: str, *, completed_query_count: int = 0) -> None:
+        super().__init__(message)
+        self.completed_query_count = completed_query_count
+
+
+class CatalogSearchDeadlineExceeded(CatalogBatchSearchFailed):
+    """A bounded batch search exceeded its interruptible SQL deadline."""
+
+
 @dataclass(frozen=True, slots=True)
 class CatalogProduct:
     product_id: str
@@ -95,13 +107,122 @@ class CatalogSearchService:
         )
 
     def search(self, query: str, *, top_k: int = 10) -> CatalogSearchResult:
-        tokens = _query_tokens(query)
-        if isinstance(top_k, bool) or not isinstance(top_k, int):
-            raise InvalidCatalogQuery("top_k must be an integer")
-        if not 1 <= top_k <= MAX_CATALOG_TOP_K:
-            raise InvalidCatalogQuery(
-                f"top_k must be between 1 and {MAX_CATALOG_TOP_K}"
-            )
+        tokens = validate_catalog_query(query, top_k=top_k)
+        with self._connect() as connection:
+            self._validate_connected_metadata(connection)
+            return self._search_tokens(connection, tokens=tokens, top_k=top_k)
+
+    def search_many(
+        self,
+        queries: list[str] | tuple[str, ...],
+        *,
+        top_k: int = 10,
+        max_elapsed_ms: int = 120_000,
+        max_query_elapsed_ms: int = 5_000,
+    ) -> tuple[CatalogSearchResult, ...]:
+        """Preflight then search one bounded batch on one immutable connection."""
+
+        if not isinstance(queries, (list, tuple)) or not queries or len(queries) > 100:
+            raise InvalidCatalogQuery("batch must contain between 1 and 100 Queries")
+        if any(not isinstance(query, str) for query in queries):
+            raise InvalidCatalogQuery("batch Queries must all be text")
+        if (
+            isinstance(max_elapsed_ms, bool)
+            or not isinstance(max_elapsed_ms, int)
+            or max_elapsed_ms < 1
+            or isinstance(max_query_elapsed_ms, bool)
+            or not isinstance(max_query_elapsed_ms, int)
+            or max_query_elapsed_ms < 1
+            or max_query_elapsed_ms > max_elapsed_ms
+        ):
+            raise InvalidCatalogQuery("batch search deadlines are invalid")
+        # Complete the whole compatibility check before opening the index or
+        # executing the first Query.
+        validated = tuple(
+            validate_catalog_query(query, top_k=top_k) for query in queries
+        )
+        batch_started = time.monotonic()
+        overall_deadline = batch_started + (max_elapsed_ms / 1_000.0)
+        results: list[CatalogSearchResult] = []
+        logger.info(
+            "catalog_batch_search_started",
+            extra={
+                "index_id": self.metadata.index_id,
+                "query_count": len(validated),
+                "top_k": top_k,
+            },
+        )
+        with self._connect() as connection:
+            try:
+                self._validate_connected_metadata(connection)
+            except (RuntimeError, ValueError) as exc:
+                raise CatalogBatchSearchFailed(
+                    "catalog index identity changed before batch search",
+                    completed_query_count=0,
+                ) from exc
+            for tokens in validated:
+                now = time.monotonic()
+                if now >= overall_deadline:
+                    raise CatalogSearchDeadlineExceeded(
+                        "catalog batch deadline exceeded",
+                        completed_query_count=len(results),
+                    )
+                query_deadline = min(
+                    overall_deadline,
+                    now + (max_query_elapsed_ms / 1_000.0),
+                )
+                interrupted = False
+
+                def interrupt_when_expired(deadline: float = query_deadline) -> int:
+                    nonlocal interrupted
+                    interrupted = time.monotonic() >= deadline
+                    return int(interrupted)
+
+                connection.set_progress_handler(interrupt_when_expired, 1_000)
+                try:
+                    results.append(
+                        self._search_tokens(connection, tokens=tokens, top_k=top_k)
+                    )
+                except CatalogBatchSearchFailed as exc:
+                    raise type(exc)(
+                        "catalog batch search failed",
+                        completed_query_count=len(results),
+                    ) from exc
+                except sqlite3.OperationalError as exc:
+                    if interrupted:
+                        raise CatalogSearchDeadlineExceeded(
+                            "catalog Query deadline exceeded",
+                            completed_query_count=len(results),
+                        ) from exc
+                    raise CatalogBatchSearchFailed(
+                        "catalog batch search failed",
+                        completed_query_count=len(results),
+                    ) from exc
+                except (sqlite3.Error, RuntimeError) as exc:
+                    raise CatalogBatchSearchFailed(
+                        "catalog batch search failed",
+                        completed_query_count=len(results),
+                    ) from exc
+                finally:
+                    connection.set_progress_handler(None, 0)
+        logger.info(
+            "catalog_batch_search_completed",
+            extra={
+                "duration_ms": round((time.monotonic() - batch_started) * 1_000, 3),
+                "index_id": self.metadata.index_id,
+                "query_count": len(results),
+                "top_k": top_k,
+            },
+        )
+        return tuple(results)
+
+    def _search_tokens(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        tokens: tuple[str, ...],
+        top_k: int,
+    ) -> CatalogSearchResult:
         match_query = " AND ".join(_quote_fts_token(token) for token in tokens)
         started = time.perf_counter()
         logger.debug(
@@ -112,16 +233,15 @@ class CatalogSearchService:
                 "top_k": top_k,
             },
         )
-        with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT product_id, locale, title, brand, color, score "
-                "FROM ("
-                "SELECT product_id, locale, title, brand, color, "
-                "bm25(catalog_products, 8.0, 0.0, 4.0, 2.0, 1.0) AS score "
-                "FROM catalog_products WHERE catalog_products MATCH ?"
-                ") ORDER BY score ASC, locale ASC, product_id ASC LIMIT ?",
-                (match_query, top_k),
-            ).fetchall()
+        rows = connection.execute(
+            "SELECT product_id, locale, title, brand, color, score "
+            "FROM ("
+            "SELECT product_id, locale, title, brand, color, "
+            "bm25(catalog_products, 8.0, 0.0, 4.0, 2.0, 1.0) AS score "
+            "FROM catalog_products WHERE catalog_products MATCH ?"
+            ") ORDER BY score ASC, locale ASC, product_id ASC LIMIT ?",
+            (match_query, top_k),
+        ).fetchall()
         hits = tuple(
             CatalogSearchHit(
                 product=CatalogProduct(
@@ -142,7 +262,7 @@ class CatalogSearchService:
                 "duration_ms": round((time.perf_counter() - started) * 1000, 3),
                 "index_id": self.metadata.index_id,
                 "query_token_count": len(tokens),
-                "result_count": len(hits),
+                "returned_at_k": len(hits),
                 "top_k": top_k,
             },
         )
@@ -160,6 +280,27 @@ class CatalogSearchService:
         connection.execute("PRAGMA cache_size=-32768")
         connection.execute("PRAGMA mmap_size=268435456")
         return connection
+
+    def _validate_connected_metadata(self, connection: sqlite3.Connection) -> None:
+        connected_metadata = CatalogIndexMetadata.from_connection(connection)
+        if connected_metadata != self.metadata:
+            raise RuntimeError("catalog index identity changed before search")
+
+
+def validate_catalog_query(query: str, *, top_k: int = 10) -> tuple[str, ...]:
+    """Validate one Query without opening the catalog index.
+
+    Batch tools use this preflight to reject an incompatible Query set before
+    the first search, so a completed diagnostic can never represent a partial
+    batch.
+    """
+
+    tokens = _query_tokens(query)
+    if isinstance(top_k, bool) or not isinstance(top_k, int):
+        raise InvalidCatalogQuery("top_k must be an integer")
+    if not 1 <= top_k <= MAX_CATALOG_TOP_K:
+        raise InvalidCatalogQuery(f"top_k must be between 1 and {MAX_CATALOG_TOP_K}")
+    return tokens
 
 
 def _query_tokens(query: str) -> tuple[str, ...]:

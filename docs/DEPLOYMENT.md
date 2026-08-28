@@ -82,7 +82,8 @@ sudo systemctl reload nginx
 ```
 
 Only `/search-agent.html`, the proposal endpoint, the stage-aware
-`/agent/retrieval/analyze` endpoint, Agent Eval and the Query constructor
+`/agent/retrieval/analyze` endpoint, Agent Eval, the Query constructor and the
+59-Query Bad Case endpoint
 require this credential. The search
 experience, strategy page, catalog search and approved strategy catalog stay
 public. The exact decision location deliberately returns 404 even with
@@ -92,13 +93,19 @@ Runtime policy allows at most 120 seconds. This is a synchronous smoke-only
 bridge; before larger data or concurrent use, replace it with a queued worker,
 pollable task status and force-terminable job deadline rather than extending the
 HTTP timeout again.
-Agent Eval uses the same 130-second proxy timeout for its fixed 12-task Suite;
-the Query constructor uses 15 seconds. Both exact routes clear the Nginx Basic
-Auth header before proxying and disable request access logs.
+Agent Eval and Bad Case diagnostics use the same 130-second proxy timeout;
+the Query constructor uses 15 seconds. All exact owner routes clear the Nginx
+Basic Auth header before proxying and disable request access logs. The Bad Case
+route additionally sends `Cache-Control: no-store` because its successful
+response contains a strictly limited raw Query/product display sample.
 The Agent Eval runner refuses new work after its private artifact tree exceeds
 2 GiB. Monitor `/var/lib/search-engine-eva-agent/runtime/agent-evals/`; archive
 old execution receipts and Traces according to the host retention policy while
 retaining any deterministic evidence cited by a decision or incident.
+Bad Case artifacts use a separate 256 MiB tree watermark plus a 2 GiB free-space
+preflight. Monitor
+`/var/lib/search-engine-eva-agent/runtime/bad-case-diagnostics/`; failed
+capacity preflight does not write another attempt receipt.
 
 ## Install or replace the index
 
@@ -178,6 +185,15 @@ curl --user shaw --request POST \
   'https://shawspace.cn/search-eval-api/agent/query-constructor/build' \
   --header 'Content-Type: application/json' \
   --data '{"source":"smoke"}'
+curl --output /dev/null --write-out '%{http_code}\n' \
+  --request POST \
+  'https://shawspace.cn/search-eval-api/agent/bad-cases/run' \
+  --header 'Content-Type: application/json' \
+  --data '{"source":"smoke"}'
+curl --user shaw --request POST \
+  'https://shawspace.cn/search-eval-api/agent/bad-cases/run' \
+  --header 'Content-Type: application/json' \
+  --data '{"source":"smoke"}'
 curl 'https://shawspace.cn/search-eval-api/agent/strategy/catalog'
 curl --output /dev/null --write-out '%{http_code}\n' \
   --request POST 'https://shawspace.cn/search-eval-api/agent/strategy/decision' \
@@ -193,11 +209,13 @@ Acceptance requires:
 1. Health reports `catalog.status=ready`, the expected index ID and 1,814,924 products.
 2. English, Spanish, Japanese and exact product-ID checks return valid JSON.
 3. Anonymous requests to the Agent page, proposal endpoint and stage-aware
-   retrieval endpoint return `401`; authenticated proposal requests return a
+   retrieval/Bad Case endpoints return `401`; authenticated proposal requests return a
    pending proposal with baseline Run ID, candidate Run ID, comparison ID,
    aggregate metric deltas and bad-case examples. An authenticated retrieval
    analysis returns all three bounded candidate outcomes, stage metrics, 12 gate
-   checks and representative product evidence. Search and strategy pages remain
+   checks and representative product evidence. A successful Bad Case response
+   reports exactly 59 calls, zero operational failures, no quality metrics or
+   strategy writes, and no more than 12 evidence-linked display samples. Search and strategy pages remain
    anonymously accessible.
 4. The strategy catalog endpoint returns the current approved runtime strategy
    list. It can be empty before the Owner approves a proposal.
@@ -222,6 +240,12 @@ Query and product examples. Keep
 the directory private (`0750`), monitor its size, back it up only when evidence
 must be retained, and review artifacts before export. Do not delete a proposal
 that has an associated human decision.
+
+Bad Case deterministic evidence under `bad-case-diagnostics/evidence/` stores
+only hashes and aggregate behavior; execution and failed-attempt receipts store
+only IDs, counts, stages and timing. The source Query-set artifact remains
+private because it contains raw Query text. The owner-only HTTP display sample
+is not a durable evidence artifact and must not be cached or copied into logs.
 
 To record an intentional human decision, sign in to the server and call
 `http://127.0.0.1:8010/agent/strategy/decision` directly with the reviewed

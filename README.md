@@ -46,6 +46,16 @@ view before producing 59 development cases (20 originals and 39 unjudged
 synthetic cases). It cannot read the locked 500-Query dev or frozen test
 profiles, and its mixed output is ineligible for formal nDCG/MRR evaluation.
 
+The first source-bounded Bad Case executor now runs exactly those 59 cases
+against the immutable full-catalog SQLite BM25 baseline. It reports only
+observable zero-result, spelling-sensitive, token-order-sensitive and
+ranking-change-needs-judgment candidates; it reads no relevance labels and
+computes no quality metric. Completed evidence binds the Query set, executor
+revision, index identity/config, Top 10 and all 59 calls, while a separate
+execution receipt records dynamic timing. It cannot diagnose multi-stage drop,
+approve or activate a strategy, or force-kill work outside SQLite's
+interruptible SQL boundary.
+
 A local-only stage-aware Agent task now makes recall, RRF fusion and coarse
 ranking explicit. On the fixed 20-Query fully judged pool it diagnoses the
 baseline, then uses observations to run uniform, conservative and aggressive
@@ -92,6 +102,7 @@ explicit pending integration check, not an implicit fallback or a claimed pass.
 - Stage-aware retrieval smoke evidence: [docs/STAGE_AWARE_RETRIEVAL_REPORT.md](docs/STAGE_AWARE_RETRIEVAL_REPORT.md)
 - Agent Evaluation Harness evidence: [docs/AGENT_EVALUATION_REPORT.md](docs/AGENT_EVALUATION_REPORT.md)
 - Source-bounded Query constructor: [docs/QUERY_CONSTRUCTOR.md](docs/QUERY_CONSTRUCTOR.md)
+- Source-bounded Bad Case diagnostics: [docs/BAD_CASE_DIAGNOSTICS.md](docs/BAD_CASE_DIAGNOSTICS.md)
 - Required learning: [docs/LEARNING_CHECKPOINTS.md](docs/LEARNING_CHECKPOINTS.md)
 - Decision and contribution provenance: [docs/CONTRIBUTION_LOG.md](docs/CONTRIBUTION_LOG.md)
 - Logging and independent diagnostics: [docs/LOGGING.md](docs/LOGGING.md)
@@ -123,6 +134,7 @@ make compare-runs
 BASELINE_RUN_ID=... CANDIDATE_RUN_ID=... make agent-smoke
 make agent-eval
 make query-set-smoke
+make bad-cases-smoke
 make catalog-index
 EVAL_RANKER=title-bm25 make eval-baseline
 QUERY="iphone 15 pro case" make smoke
@@ -145,6 +157,10 @@ evidence plus a separate execution receipt under ignored `runs/agent-evals/`.
 `make query-set-smoke` creates an immutable exploratory Query set under
 `runs/query-sets/`. Neither command approves a proposal, changes an active
 strategy, deploys code or unlocks larger evaluation profiles.
+
+`make bad-cases-smoke` preflights and searches all 59 cases, then stores hashed
+behavioral evidence under `runs/bad-case-diagnostics/`. Its categories are
+diagnostic candidates, not relevance judgments or formal benchmark results.
 
 The Stage 2 CLI trusts the local operator and only loads artifacts directly from
 the project's ignored `runs/` store. Run and comparison IDs are content hashes:
@@ -195,6 +211,10 @@ curl --request POST 'http://127.0.0.1:8000/agent/eval/run' \
 curl --request POST 'http://127.0.0.1:8000/agent/query-constructor/build' \
   --header 'Content-Type: application/json' \
   --data '{"source":"smoke"}'
+
+curl --request POST 'http://127.0.0.1:8000/agent/bad-cases/run' \
+  --header 'Content-Type: application/json' \
+  --data '{"source":"smoke"}'
 ```
 
 `/agent/retrieval/analyze` creates a bounded Runtime task, executes two
@@ -209,6 +229,9 @@ response contains Query and product evidence.
 The Agent Eval and Query-constructor routes are also exact, authenticated Nginx
 locations. Their browser responses contain only aggregate counts and evidence
 IDs; detailed traces and raw Query cases remain private server-side artifacts.
+The Bad Case route is separately owner-only and may return at most 12 transient,
+hash-checked display samples; its persisted diagnostic evidence remains
+hash-only and the production response is marked `Cache-Control: no-store`.
 
 ## What the Stage 0 vector result means
 
@@ -317,9 +340,10 @@ not presented as full-catalog recall.
 
 ## Next step
 
-Run the constructed smoke cases through the baseline and classify zero-result,
-spelling-sensitive, token-order and stage-drop Bad Cases. Add a small
-human-reviewed diagnosis Oracle and force-terminating worker deadline before a
-model Planner is connected. The Owner still needs to complete the Stage 1
+Add a small human-reviewed diagnosis Oracle, a stage-aware executor for
+recall/fusion/coarse-rank drop, and a force-terminating worker deadline before a
+model Planner is connected. The current single-stage executor already covers
+all 59 source-bounded cases but cannot establish relevance quality. The Owner
+still needs to complete the Stage 1
 data-boundary and Stage 2 metric learning evidence before the 500-Query dev
 profile is explicitly unlocked; frozen test remains unavailable to tuning.

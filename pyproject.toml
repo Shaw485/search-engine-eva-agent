@@ -27,6 +27,7 @@ search-quality-agent = "search_quality.agent.cli:main"
 search-quality-agent-replay = "search_quality.agent.replay_cli:main"
 search-quality-agent-eval = "search_quality.agent_eval.cli:main"
 search-quality-query-constructor = "search_quality.query_constructor.cli:main"
+search-quality-bad-cases = "search_quality.bad_cases.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

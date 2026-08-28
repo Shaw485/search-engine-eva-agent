@@ -29,6 +29,7 @@ stderr. Normal CLI results remain on stdout.
 | `agent_optimization` | Strategy proposal, decision and catalog lifecycle | `WARNING` |
 | `agent_eval` | Fixed Agent task suite, independent grading and artifact publication | `WARNING` |
 | `query_constructor` | Source-bounded Query construction and immutable storage | `WARNING` |
+| `bad_case` | Fixed 59-Query batch, evidence publication, rerun and failed attempts | `WARNING` |
 | `retrieval` | Label-blind recall channels, fusion, stage retention and retrieval Runs | `WARNING` |
 | `stage_diagnosis` | Stage evidence validation and bottleneck diagnosis | `WARNING` |
 | `retrieval_analysis` | Bounded experiment orchestration and artifact publication | `WARNING` |
@@ -50,6 +51,7 @@ export SEARCH_LOG_LEVEL_CATALOG=INFO
 export SEARCH_LOG_LEVEL_AGENT_RUNTIME=DEBUG
 export SEARCH_LOG_LEVEL_AGENT_EVAL=INFO
 export SEARCH_LOG_LEVEL_QUERY_CONSTRUCTOR=INFO
+export SEARCH_LOG_LEVEL_BAD_CASE=INFO
 export SEARCH_LOG_LEVEL_RETRIEVAL=DEBUG
 export SEARCH_LOG_LEVEL_RETRIEVAL_ANALYSIS=INFO
 export SEARCH_LOG_LEVEL_STAGE_DIAGNOSIS=INFO
@@ -100,6 +102,10 @@ JSON diagnostics separate from the normal result:
 .venv/bin/python -m search_quality.query_constructor.cli \
   --log-module query_constructor=INFO \
   2>query-constructor.jsonl
+
+.venv/bin/python -m search_quality.bad_cases.cli \
+  --log-module bad_case=DEBUG \
+  2>bad-case-debug.jsonl
 ```
 
 To isolate one subsystem, set the global level to `OFF` and enable only that
@@ -347,6 +353,11 @@ systemd-analyze cat-config systemd/journald.conf
 16. `query_constructor`: run `make query-set-smoke` with only
     `query_constructor=INFO`; filter by `query_set_id`. Inspect the private
     artifact for case text; logs deliberately expose only counts and hashes.
+17. `bad_case`: run `make bad-cases-smoke` with only `bad_case=DEBUG`; filter by
+    `execution_id`, `diagnostic_id`, `failure_stage` and
+    `completed_query_count`. Search text, product IDs/titles and exception
+    messages never enter logs. Enable `catalog=INFO` separately to inspect the
+    59-call boundary and interruptible SQL timing.
 
 `tests/test_observability.py` and `tests/test_catalog_search.py` verify JSON structure, module isolation,
 redaction variants, error classification, stable events, low-noise defaults and
@@ -373,4 +384,9 @@ dynamic execution receipts, Replay/tamper behavior, zero strategy writes and
 module-specific privacy. Query-constructor tests verify smoke-only authorization
 before reads, projected-column minimization, global de-duplication, no label
 inheritance, confined immutable storage and log privacy. Deployment tests keep
-both exact API locations behind Basic Auth and strip the Authorization header.
+all owner-only exact API locations behind Basic Auth and strip the Authorization header.
+Bad Case tests additionally verify whole-batch preflight, exact 59-call
+completion, mid-batch failure counts, SQLite deadline interruption,
+cross-process locking, source/index/authority binding, offline tamper rejection,
+raw-content exclusion and owner-only sample limits. Production keeps verbose
+`bad_case` logging off unless that subsystem is being diagnosed.

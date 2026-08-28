@@ -73,6 +73,7 @@ def build_smoke_query_set(
     project_root: str | Path,
     source_profile: str = "smoke",
     revision_provider: Callable[[Path], str] = require_clean_code_revision,
+    profile_access_recorder: Callable[[str], None] | None = None,
 ) -> QuerySetArtifact:
     """Construct original and exploratory variants from the committed smoke set.
 
@@ -122,6 +123,8 @@ def build_smoke_query_set(
             "source_file_sha256": observed_source_sha256,
         },
     )
+    if profile_access_recorder is not None:
+        profile_access_recorder(profile.profile_id)
     frame = pl.read_parquet(source_path, columns=_SOURCE_COLUMNS).with_columns(
         pl.col("query_text").cast(pl.String),
         pl.col("source").cast(pl.String).str.to_lowercase(),

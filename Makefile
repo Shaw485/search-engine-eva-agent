@@ -9,7 +9,7 @@ EVAL_RANKER ?= all
 .PHONY: help setup format lint policy check test smoke data-sample data-download \
 	data-esci-validate data-esci-build api opensearch-up opensearch-down \
 	smoke-opensearch eval-baseline compare-runs agent-smoke agent-eval \
-	query-set-smoke catalog-index web clean
+	query-set-smoke bad-cases-smoke catalog-index web clean
 
 help:
 	@echo "setup             Create the virtual environment and install dependencies"
@@ -34,6 +34,7 @@ help:
 	@echo "agent-smoke       Run the deterministic smoke-only Agent Runtime"
 	@echo "agent-eval        Run the fixed 12-task Stage 5 Agent Eval Harness"
 	@echo "query-set-smoke   Build the source-bounded exploratory Query set"
+	@echo "bad-cases-smoke   Run the fixed 59-Query behavioral diagnostics"
 
 setup:
 	$(PYTHON) -m venv $(VENV)
@@ -108,6 +109,9 @@ agent-eval:
 
 query-set-smoke:
 	$(VENV_PYTHON) -m search_quality.query_constructor.cli
+
+bad-cases-smoke:
+	$(VENV_PYTHON) -m search_quality.bad_cases.cli
 
 web:
 	@echo "Stage 7 command reserved: the Web product is not implemented in Stage 0." >&2

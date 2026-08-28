@@ -27,6 +27,11 @@ from search_quality.agent.optimization import (
 )
 from search_quality.agent.retrieval_runtime import generate_retrieval_runtime_analysis
 from search_quality.agent_eval.runner import run_agent_eval_suite
+from search_quality.bad_cases.artifacts import BadCaseRunInProgress
+from search_quality.bad_cases.contracts import (
+    BadCaseCategoryCounts,
+)
+from search_quality.bad_cases.runner import run_bad_case_diagnostics
 from search_quality.catalog import (
     DEFAULT_CATALOG_INDEX,
     CatalogSearchService,
@@ -49,6 +54,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CODE_REVISION_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
 _AGENT_PROPOSAL_LOCK = threading.Lock()
 _AGENT_EVAL_LOCK = threading.Lock()
+_BAD_CASE_LOCK = threading.Lock()
 _AGENT_PROPOSAL_CACHE: dict[tuple[str, str, str, str], dict] = {}
 
 app = FastAPI(
@@ -200,6 +206,7 @@ async def request_diagnostics(request: Request, call_next):
                 "/agent/strategy/propose",
                 "/agent/retrieval/analyze",
                 "/agent/eval/run",
+                "/agent/bad-cases/run",
                 "/agent/query-constructor/build",
                 "/catalog/search",
                 "/health",
@@ -465,6 +472,179 @@ class QueryConstructorResponse(BaseModel):
         ):
             raise ValueError("construction counts do not match Query count")
         return self
+
+
+class BadCaseRunRequest(BaseModel):
+    """Run only the fixed source-bounded smoke Query set."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    source: Literal["smoke"] = "smoke"
+
+
+BadCaseCategoryName = Literal[
+    "zero_result",
+    "spelling_sensitive",
+    "order_sensitive",
+    "ranking_instability_needs_judgment",
+]
+BadCaseReasonName = Literal[
+    "identity_zero_result",
+    "variant_zero_result",
+    "variant_result_set_changed",
+    "variant_ranking_changed",
+    "token_order_result_changed",
+]
+BAD_CASE_CATEGORY_ORDER = (
+    "zero_result",
+    "spelling_sensitive",
+    "order_sensitive",
+    "ranking_instability_needs_judgment",
+)
+
+
+class BadCaseDisplayHitResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    product_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+    locale: str = Field(pattern=r"^[a-z][a-z0-9-]{1,15}$")
+    title: str = Field(min_length=1, max_length=256)
+    rank: int = Field(ge=1, le=3)
+
+
+class BadCaseSampleResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    case_id: str = Field(pattern=r"^query-case-[0-9a-f]{12}$")
+    source_case_id: str = Field(pattern=r"^query-case-[0-9a-f]{12}$")
+    construction: Literal["identity", "adjacent_transposition", "token_order_reversal"]
+    categories: list[BadCaseCategoryName] = Field(min_length=1, max_length=4)
+    reason_code: BadCaseReasonName
+    query_text: str = Field(min_length=1, max_length=200)
+    source_query_text: str = Field(min_length=1, max_length=200)
+    source_returned_at_k: int = Field(ge=0, le=10)
+    variant_returned_at_k: int = Field(ge=0, le=10)
+    overlap_at_k: int = Field(ge=0, le=10)
+    source_top_hits: list[BadCaseDisplayHitResponse] = Field(max_length=3)
+    variant_top_hits: list[BadCaseDisplayHitResponse] = Field(max_length=3)
+
+    @model_validator(mode="after")
+    def validate_sample(self) -> Self:
+        if self.categories != [
+            category
+            for category in BAD_CASE_CATEGORY_ORDER
+            if category in self.categories
+        ] or len(self.categories) != len(set(self.categories)):
+            raise ValueError("sample categories must be unique and ordered")
+        if self.overlap_at_k > min(
+            self.source_returned_at_k,
+            self.variant_returned_at_k,
+        ):
+            raise ValueError("sample overlap exceeds returned results")
+        if self.construction == "identity":
+            if (
+                self.case_id != self.source_case_id
+                or self.query_text != self.source_query_text
+            ):
+                raise ValueError("identity sample must match its source")
+        elif self.case_id == self.source_case_id:
+            raise ValueError("synthetic sample must reference its identity source")
+        if "zero_result" in self.categories and self.variant_returned_at_k != 0:
+            raise ValueError("zero-result sample must have no variant results")
+        if "spelling_sensitive" in self.categories and (
+            self.construction != "adjacent_transposition"
+        ):
+            raise ValueError("spelling sensitivity requires transposition")
+        if "order_sensitive" in self.categories and (
+            self.construction != "token_order_reversal"
+        ):
+            raise ValueError("order sensitivity requires token reversal")
+        if "ranking_instability_needs_judgment" in self.categories and (
+            self.source_returned_at_k == 0 or self.variant_returned_at_k == 0
+        ):
+            raise ValueError("ranking instability requires results on both sides")
+        _validate_api_display_hits(self.source_top_hits, self.source_returned_at_k)
+        _validate_api_display_hits(self.variant_top_hits, self.variant_returned_at_k)
+        return self
+
+
+class BadCaseRunResponse(BaseModel):
+    """Owner-only aggregate plus strictly limited understandable samples."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal["bad-case-api-summary-v1"]
+    completed: Literal[True]
+    diagnostic_id: str = Field(pattern=r"^bad-case-[0-9a-f]{12}$")
+    execution_id: str = Field(pattern=r"^bad-case-execution-[0-9a-f]{32}$")
+    query_set_id: str = Field(pattern=r"^query-set-[0-9a-f]{12}$")
+    index_id: str = Field(pattern=r"^catalog-baseline-v1-[0-9a-f]{12}$")
+    search_strategy_id: Literal["sqlite-fts5-bm25"]
+    query_count: Literal[59]
+    original_count: Literal[20]
+    synthetic_count: Literal[39]
+    construction_counts: QueryConstructionCountsResponse
+    top_k: Literal[10]
+    search_call_count: Literal[59]
+    operational_failure_count: Literal[0]
+    diagnostic_candidate_count: int = Field(ge=0, le=59)
+    category_counts: BadCaseCategoryCounts
+    samples: list[BadCaseSampleResponse] = Field(max_length=12)
+    relevance_labels_used: Literal[False]
+    relevance_metrics_computed: Literal[False]
+    quality_metrics_computed: Literal[False]
+    formal_evaluation_allowed: Literal[False]
+    stage_drop_diagnostics_computed: Literal[False]
+    locked_profiles_not_read: tuple[Literal["dev"], Literal["test"]]
+    protected_profile_dispatch_count: Literal[0]
+    strategy_write_count: Literal[0]
+    limitations: tuple[
+        Literal["synthetic_queries_are_unjudged"],
+        Literal["diagnostics_do_not_claim_relevance_improvement"],
+        Literal["development_smoke_is_not_final_evaluation"],
+        Literal["single_stage_catalog_cannot_diagnose_stage_drop"],
+        Literal["no_hard_worker_deadline_enforcement"],
+    ]
+
+    @model_validator(mode="after")
+    def validate_summary(self) -> Self:
+        counts = self.construction_counts
+        if (
+            counts.identity != 20
+            or counts.adjacent_transposition != 20
+            or counts.token_order_reversal != 19
+        ):
+            raise ValueError("Bad Case construction counts do not match 59 cases")
+        values = self.category_counts.model_dump(mode="json")
+        if any(value > self.diagnostic_candidate_count for value in values.values()):
+            raise ValueError("category count exceeds diagnostic candidates")
+        category_total = sum(values.values())
+        if not (
+            self.diagnostic_candidate_count
+            <= category_total
+            <= self.diagnostic_candidate_count * 4
+        ):
+            raise ValueError("category totals do not cover diagnostic candidates")
+        if len(self.samples) > self.diagnostic_candidate_count:
+            raise ValueError("display samples exceed diagnostic candidates")
+        if len({sample.case_id for sample in self.samples}) != len(self.samples):
+            raise ValueError("display sample cases must be unique")
+        for sample in self.samples:
+            if any(values[category] == 0 for category in sample.categories):
+                raise ValueError("display sample category is absent from aggregate")
+        return self
+
+
+def _validate_api_display_hits(
+    hits: list[BadCaseDisplayHitResponse],
+    returned_at_k: int,
+) -> None:
+    if len(hits) > returned_at_k:
+        raise ValueError("display hits exceed returned results")
+    if [item.rank for item in hits] != list(range(1, len(hits) + 1)):
+        raise ValueError("display hit ranks must be contiguous and ordered")
+    if len({(item.locale, item.product_id) for item in hits}) != len(hits):
+        raise ValueError("display hit product keys must be unique")
 
 
 RetrievalGateName = Literal[
@@ -883,6 +1063,93 @@ def agent_query_constructor_build(request: QueryConstructorRequest) -> dict:
                 "trace_id": trace_id,
             },
         ) from exc
+
+
+@app.post("/agent/bad-cases/run", response_model=BadCaseRunResponse)
+def agent_bad_cases_run(request: BadCaseRunRequest) -> dict:
+    """Run 59 label-blind diagnostics without changing the search strategy."""
+
+    if not _BAD_CASE_LOCK.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "bad_case_run_in_progress",
+                "message": "Bad Case diagnostics are already running",
+                "trace_id": current_trace_id(),
+            },
+        )
+    try:
+        run = run_bad_case_diagnostics(
+            project_root=PROJECT_ROOT,
+            artifact_root=_agent_artifact_root(),
+            source_profile=request.source,
+            revision_provider=_api_code_revision,
+            # Bind metadata and searches to a fresh service each run. The
+            # general public endpoint may cache readiness, but deterministic
+            # evidence must detect an atomically replaced catalog index.
+            search_service=CatalogSearchService(_catalog_index_path()),
+        )
+        artifact = run.artifact
+        return {
+            "schema_version": "bad-case-api-summary-v1",
+            "completed": artifact.completed,
+            "diagnostic_id": artifact.diagnostic_id,
+            "execution_id": run.execution.execution_id,
+            "query_set_id": artifact.query_set_id,
+            "index_id": artifact.index_id,
+            "search_strategy_id": artifact.search_strategy_id,
+            "query_count": artifact.query_count,
+            "original_count": artifact.original_count,
+            "synthetic_count": artifact.synthetic_count,
+            "construction_counts": artifact.construction_counts,
+            "top_k": artifact.top_k,
+            "search_call_count": artifact.search_call_count,
+            "operational_failure_count": artifact.operational_failure_count,
+            "diagnostic_candidate_count": artifact.diagnostic_candidate_count,
+            "category_counts": artifact.category_counts.model_dump(mode="json"),
+            "samples": [item.model_dump(mode="json") for item in run.samples],
+            "relevance_labels_used": artifact.relevance_labels_used,
+            "relevance_metrics_computed": artifact.relevance_metrics_computed,
+            "quality_metrics_computed": artifact.quality_metrics_computed,
+            "formal_evaluation_allowed": artifact.formal_evaluation_allowed,
+            "stage_drop_diagnostics_computed": (
+                artifact.stage_drop_diagnostics_computed
+            ),
+            "locked_profiles_not_read": artifact.locked_profiles_not_read,
+            "protected_profile_dispatch_count": (
+                artifact.protected_profile_dispatch_count
+            ),
+            "strategy_write_count": artifact.strategy_write_count,
+            "limitations": artifact.limitations,
+        }
+    except BadCaseRunInProgress as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "bad_case_run_in_progress",
+                "message": "Bad Case diagnostics are already running",
+                "trace_id": current_trace_id(),
+            },
+        ) from exc
+    except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
+        trace_id = current_trace_id()
+        logger.error(
+            "bad_case_run_failed",
+            extra={
+                "error_code": classify_error(exc),
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "bad_case_run_unavailable",
+                "message": "Bad Case diagnostics unavailable",
+                "trace_id": trace_id,
+            },
+        ) from exc
+    finally:
+        _BAD_CASE_LOCK.release()
 
 
 @app.get("/agent/strategy/catalog")

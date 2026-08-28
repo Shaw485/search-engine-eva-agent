@@ -191,6 +191,29 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
   独立理解证据，也不解锁 500-Query dev 或 frozen test。
 - 状态：**Explanation delivered; independent verification pending**
 
+## 当前插入知识：行为变化不是相关性退化
+
+【必学知识提醒】
+
+- 当前知识：59-Query 执行器做的是 metamorphic/behavioral diagnostics。它能
+  证明“改一个字母后零结果”或“倒序后 Top 10 变化”，但没有新 Query 的 ESCI
+  相关性标签，因此不能证明结果变好、变差或定位真实根因。
+- 为什么现在必须理解：如果把 `spelling_sensitive` 直接写成“纠错一定能提升”，
+  Agent 就会用没有标签的变化替代 Search Harness 证据；如果把 category counts
+  相加当作案例数，还会因同一案例同时命中多个 flag 而重复计数。
+- 最低掌握范围：能区分 `returned_at_k` 与全库 `product_count`；能说明
+  `diagnostic_candidate_count` 是唯一案例数、category flags 可以重叠；能解释
+  为什么 BM25 分数不能跨不同 Query 直接作差。
+- 具体例子：原 Query 有 10 个结果、相邻字母调换后为 0，只能记录
+  `zero_result + spelling_sensitive`。下一步应由人工 Oracle 或带独立标签的
+  Search Evaluation Harness 判断纠错候选是否真正提升 nDCG/MRR。
+- 当前工程边界：SQLite progress handler 能中断超时 SQL，跨进程 `flock` 能
+  防止重复运行，但这仍不是可强杀的 worker deadline；单阶段 catalog 也看不到
+  recall、fusion、coarse-rank 的 stage drop。
+- 验证证据：`docs/BAD_CASE_DIAGNOSTICS.md`。Owner 的“执行”是实施授权，不是
+  独立理解证据；500-Query dev 与 frozen test 继续锁定。
+- 状态：**Explanation delivered; independent verification pending**
+
 ## 检查点记录
 
 完成一个检查点后，在这里追加简短记录：

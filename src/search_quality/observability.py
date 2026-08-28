@@ -32,6 +32,7 @@ LOG_MODULES = frozenset(
         "agent_trace",
         "api",
         "backend",
+        "bad_case",
         "catalog",
         "data",
         "evaluation",

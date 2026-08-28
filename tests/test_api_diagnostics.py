@@ -14,6 +14,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from apps.api import main as api
+from search_quality.bad_cases.contracts import (
+    BadCaseCategoryCounts,
+    BadCaseDisplayHit,
+    BadCaseSample,
+)
 from search_quality.observability import (
     configure_logging,
     current_trace_id,
@@ -308,11 +313,175 @@ def test_query_constructor_failure_is_safe_and_omits_source_content(
     assert event["error_type"] == "ValueError"
 
 
+def _fake_bad_case_run():
+    sample = BadCaseSample(
+        case_id="query-case-aaaaaaaaaaaa",
+        source_case_id="query-case-bbbbbbbbbbbb",
+        construction="adjacent_transposition",
+        categories=["zero_result", "spelling_sensitive"],
+        reason_code="variant_zero_result",
+        query_text="wieeless mouse",
+        source_query_text="wireless mouse",
+        source_returned_at_k=1,
+        variant_returned_at_k=0,
+        overlap_at_k=0,
+        source_top_hits=[
+            BadCaseDisplayHit(
+                product_id="B000EXACT1",
+                locale="us",
+                title="Private readable product",
+                rank=1,
+            )
+        ],
+        variant_top_hits=[],
+    )
+    artifact = SimpleNamespace(
+        completed=True,
+        diagnostic_id="bad-case-aaaaaaaaaaaa",
+        query_set_id="query-set-bbbbbbbbbbbb",
+        index_id="catalog-baseline-v1-cccccccccccc",
+        search_strategy_id="sqlite-fts5-bm25",
+        query_count=59,
+        original_count=20,
+        synthetic_count=39,
+        construction_counts={
+            "identity": 20,
+            "adjacent_transposition": 20,
+            "token_order_reversal": 19,
+        },
+        top_k=10,
+        search_call_count=59,
+        operational_failure_count=0,
+        diagnostic_candidate_count=1,
+        category_counts=BadCaseCategoryCounts(
+            zero_result=1,
+            spelling_sensitive=1,
+            order_sensitive=0,
+            ranking_instability_needs_judgment=0,
+        ),
+        relevance_labels_used=False,
+        relevance_metrics_computed=False,
+        quality_metrics_computed=False,
+        formal_evaluation_allowed=False,
+        stage_drop_diagnostics_computed=False,
+        locked_profiles_not_read=("dev", "test"),
+        protected_profile_dispatch_count=0,
+        strategy_write_count=0,
+        limitations=(
+            "synthetic_queries_are_unjudged",
+            "diagnostics_do_not_claim_relevance_improvement",
+            "development_smoke_is_not_final_evaluation",
+            "single_stage_catalog_cannot_diagnose_stage_drop",
+            "no_hard_worker_deadline_enforcement",
+        ),
+    )
+    return SimpleNamespace(
+        artifact=artifact,
+        execution=SimpleNamespace(execution_id="bad-case-execution-" + ("d" * 32)),
+        samples=[sample],
+    )
+
+
+def test_bad_case_endpoint_runs_fixed_batch_and_returns_limited_samples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = _fake_bad_case_run()
+    service = object()
+
+    def run(**kwargs):
+        assert kwargs == {
+            "project_root": api.PROJECT_ROOT,
+            "artifact_root": None,
+            "source_profile": "smoke",
+            "revision_provider": api._api_code_revision,
+            "search_service": service,
+        }
+        return expected
+
+    monkeypatch.setattr(api, "_agent_artifact_root", lambda: None)
+    monkeypatch.setattr(api, "_catalog_index_path", lambda: "trusted-index")
+    monkeypatch.setattr(api, "CatalogSearchService", lambda path: service)
+    monkeypatch.setattr(api, "run_bad_case_diagnostics", run)
+    response = api.agent_bad_cases_run(api.BadCaseRunRequest())
+    validated = api.BadCaseRunResponse.model_validate(response, strict=True)
+
+    assert validated.completed is True
+    assert validated.query_count == 59
+    assert validated.search_call_count == 59
+    assert validated.operational_failure_count == 0
+    assert validated.diagnostic_candidate_count == 1
+    assert validated.samples[0].query_text == "wieeless mouse"
+    assert validated.samples[0].source_top_hits[0].title == ("Private readable product")
+    assert validated.relevance_labels_used is False
+    assert validated.quality_metrics_computed is False
+    assert validated.stage_drop_diagnostics_computed is False
+
+    contradictory = dict(response)
+    contradictory["diagnostic_candidate_count"] = 3
+    with pytest.raises(ValueError, match="category totals"):
+        api.BadCaseRunResponse.model_validate(contradictory, strict=True)
+
+    duplicate = dict(response)
+    duplicate["samples"] = response["samples"] * 2
+    duplicate["diagnostic_candidate_count"] = 2
+    duplicate["category_counts"] = {
+        "zero_result": 2,
+        "spelling_sensitive": 2,
+        "order_sensitive": 0,
+        "ranking_instability_needs_judgment": 0,
+    }
+    with pytest.raises(ValueError, match="unique"):
+        api.BadCaseRunResponse.model_validate(duplicate, strict=True)
+
+
+def test_bad_case_endpoint_rejects_concurrent_run() -> None:
+    assert api._BAD_CASE_LOCK.acquire(blocking=False)
+    try:
+        with pytest.raises(HTTPException) as captured:
+            api.agent_bad_cases_run(api.BadCaseRunRequest())
+    finally:
+        api._BAD_CASE_LOCK.release()
+    assert captured.value.status_code == 409
+    assert captured.value.detail["code"] == "bad_case_run_in_progress"
+
+
+def test_bad_case_failure_is_safe_and_omits_query_and_title(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream = io.StringIO()
+    configure_logging(
+        default_level="OFF",
+        module_levels={"api": "INFO"},
+        stream=stream,
+    )
+
+    def fail(**_kwargs):
+        raise ValueError("private Query and private product title")
+
+    monkeypatch.setattr(api, "_catalog_index_path", lambda: "trusted-index")
+    monkeypatch.setattr(api, "CatalogSearchService", lambda path: object())
+    monkeypatch.setattr(api, "run_bad_case_diagnostics", fail)
+    with logging_context(trace_id="bad-case-api-safe"):
+        with pytest.raises(HTTPException) as captured:
+            api.agent_bad_cases_run(api.BadCaseRunRequest())
+    assert captured.value.status_code == 503
+    assert captured.value.detail == {
+        "code": "bad_case_run_unavailable",
+        "message": "Bad Case diagnostics unavailable",
+        "trace_id": "bad-case-api-safe",
+    }
+    assert "private Query" not in stream.getvalue()
+    assert "private product title" not in stream.getvalue()
+    assert "bad_case_run_failed" in stream.getvalue()
+
+
 def test_new_agent_tool_requests_forbid_overrides() -> None:
     with pytest.raises(ValueError):
         api.AgentEvalRequest(suite="stage5-retrieval-v1", profile="test")
     with pytest.raises(ValueError):
         api.QueryConstructorRequest(source="smoke", source_path="/private/data")
+    with pytest.raises(ValueError):
+        api.BadCaseRunRequest(source="smoke", query_set_id="query-set-private")
 
 
 def test_runtime_response_rejects_two_failed_attempts_before_success() -> None:

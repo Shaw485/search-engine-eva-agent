@@ -125,6 +125,15 @@ class CatalogIndexMetadata:
             raise ValueError("catalog index locale counts are invalid")
         if self.index_config != INDEX_CONFIG:
             raise ValueError("catalog index configuration is unsupported")
+        expected_index_id = _catalog_index_id(
+            source_sha256=self.source_sha256,
+            source_size=self.source_size,
+            product_count=self.product_count,
+            locale_counts=self.locale_counts,
+            code_revision=self.code_revision,
+        )
+        if self.index_id != expected_index_id:
+            raise ValueError("catalog index ID does not match its metadata identity")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -351,6 +360,34 @@ def _metadata_for_build(
     locale_counts: dict[str, int],
     code_revision: str,
 ) -> CatalogIndexMetadata:
+    metadata = CatalogIndexMetadata(
+        index_id=_catalog_index_id(
+            source_sha256=source_sha256,
+            source_size=source_size,
+            product_count=product_count,
+            locale_counts=locale_counts,
+            code_revision=code_revision,
+        ),
+        schema_version=CATALOG_SCHEMA_VERSION,
+        source_sha256=source_sha256,
+        source_size=source_size,
+        product_count=product_count,
+        locale_counts=locale_counts,
+        code_revision=code_revision,
+        index_config=json.loads(json.dumps(INDEX_CONFIG)),
+    )
+    metadata.validate()
+    return metadata
+
+
+def _catalog_index_id(
+    *,
+    source_sha256: str,
+    source_size: int,
+    product_count: int,
+    locale_counts: dict[str, int],
+    code_revision: str,
+) -> str:
     identity = {
         "code_revision": code_revision,
         "index_config": INDEX_CONFIG,
@@ -367,18 +404,7 @@ def _metadata_for_build(
         sort_keys=True,
         allow_nan=False,
     ).encode("utf-8")
-    metadata = CatalogIndexMetadata(
-        index_id=f"catalog-baseline-v1-{hashlib.sha256(canonical).hexdigest()[:12]}",
-        schema_version=CATALOG_SCHEMA_VERSION,
-        source_sha256=source_sha256,
-        source_size=source_size,
-        product_count=product_count,
-        locale_counts=locale_counts,
-        code_revision=code_revision,
-        index_config=json.loads(json.dumps(INDEX_CONFIG)),
-    )
-    metadata.validate()
-    return metadata
+    return f"catalog-baseline-v1-{hashlib.sha256(canonical).hexdigest()[:12]}"
 
 
 def _store_metadata(

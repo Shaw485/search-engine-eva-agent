@@ -320,6 +320,12 @@ Task Success、独立 evidence-ref Grounding、工具选择、恢复、预算、
 全局去重案例。合成样本没有继承 ESCI 标签，只能用于 Bad Case 探索，不能
 进入正式 nDCG/MRR；dev/test 在任何数据读取前即被拒绝。
 
+第一版单阶段 Bad Case 执行器也已接通：它先整体预检 59 个 Query，再用一个
+只读 immutable SQLite 连接执行 59 次 Top-10 搜索，归类零结果、拼写变换后
+结果变化、词序变换后结果变化和需要人工判断的排名输出变化。任一搜索失败都
+不发布 completed evidence；SQL 有 progress-handler deadline，artifact root 有
+跨进程锁。该工具不读取标签、不算质量指标、不写策略，也不能诊断 stage drop。
+
 ### 阶段 6：搜索策略与 Bad Case 实验室
 
 目标：把更强的搜索能力作为 Agent 可组合的实验工具，而不是孤立 Demo。
@@ -432,13 +438,17 @@ Agent 不可以：
 - 当前阶段检索响应会同时生成 Run/Comparison/Trace 和 Owner-reviewable
   证据，但不创建审批决定、不更新 strategy catalog、不改变 active config，
   也没有部署到线上工作台。
+- 固定 59-Query 单阶段执行器已能产生可重放校验的行为诊断：确定性
+  `diagnostic_id` 与动态 `execution_id` 分离，owner-only API 只返回最多 12 个
+  受哈希证据约束的展示样本。它不把结果变化冒充相关性退化。
 
 ### Next
 
-- 让 Agent 实际执行 Query 构造器产物，归类零结果、拼写敏感、词序敏感和
-  stage-drop Bad Case，并建立一小组人工复核的诊断 Oracle。
-- 补强制 worker deadline 和跨进程运行锁；保持 500-Query dev/frozen test
-  门禁不变。
+- 建立一小组人工复核的诊断 Oracle，并把 stage-aware retrieval 的
+  recall/fusion/coarse-rank 证据接入 Bad Case executor；当前单阶段 catalog
+  不能观察 stage drop。
+- 把同步执行迁入可强制终止的 worker deadline；跨进程运行锁与 SQLite SQL
+  中断已实现，但不能冒充通用进程强杀。保持 500-Query dev/frozen test 门禁。
 - 实现认证 Owner 审批、CSRF、审计身份、验证后生效和可验证回滚。
 - 将仍独立的 exact-boost 控制器迁入统一 Runtime 工具与 Trace 契约。
 
@@ -523,11 +533,12 @@ Agent 不可以：
 
 ## 10. 当前唯一下一步
 
-把第一版 Agent Eval 从“固定契约情境”推进到“可验证的 Bad Case 发现任务”：
-Query 构造器提供来源与分桶，Agent 在 smoke 范围内实际搜索这些探索 Query，
-识别零结果、拼写敏感、词序敏感和阶段丢失案例，再输出可由独立 Oracle 检查的
-诊断与候选实验计划。先补 worker 强制 deadline、任务级失败分类和人工复核过的
-黄金案例，不接真实模型、不批准策略，也不修改 `/catalog/search`。
+把现有单阶段、无标签的 59-Query 行为诊断升级成“可由独立 Oracle 检查的
+Bad Case 发现任务”：先人工复核一小组黄金案例，再接入 stage-aware retrieval
+证据以区分 recall、fusion 与 coarse-rank drop，并把同步执行迁入可强制终止的
+worker。当前已完成任务级失败分类、跨进程锁和 SQLite SQL deadline，但不能用
+它们冒充通用 worker 强杀，也不能把结果变化直接写成相关性退化。下一步仍不接
+真实模型、不批准策略、不修改 `/catalog/search`。
 
 该工作仍不解锁 500-Query dev 或 frozen test。更大验证、模型 Planner、浏览器
 审批、全量 serving pipeline 和线上生效分别需要学习证据、安全机制与 Owner

@@ -33,6 +33,18 @@ def _build(*, project_root: Path = ROOT) -> QuerySetArtifact:
     )
 
 
+def test_source_access_recorder_observes_only_smoke() -> None:
+    observed: list[str] = []
+    artifact = builder.build_smoke_query_set(
+        project_root=ROOT,
+        revision_provider=lambda _root: TEST_REVISION,
+        profile_access_recorder=observed.append,
+    )
+
+    assert artifact.query_count == 59
+    assert observed == ["smoke"]
+
+
 def _copy_pinned_metadata(project_root: Path) -> None:
     contract = project_root / builder.DEFAULT_SOURCE_CONTRACT
     contract.parent.mkdir(parents=True)
