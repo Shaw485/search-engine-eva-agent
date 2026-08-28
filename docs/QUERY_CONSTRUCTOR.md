@@ -4,6 +4,16 @@ Date: 2026-08-29
 Contract: `source-bounded-query-set-v1`
 Status: local smoke-only tool; not a formal evaluation dataset
 
+Latest clean-revision construction anchor:
+
+- code revision: `c46f5d3f7d91eb34988091237f7de4cdf57c9784`;
+- Query-set ID: `query-set-77e958fa90b5`;
+- counts: `59 = 20 identity + 39 unjudged synthetic`, with zero dropped
+  collisions for this pinned source.
+
+This anchor demonstrates deterministic construction and boundary enforcement;
+it is not a relevance score and must not be presented as formal search quality.
+
 ## Purpose
 
 The Query constructor gives the Agent additional development cases for Bad Case

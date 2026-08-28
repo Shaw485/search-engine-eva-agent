@@ -3,8 +3,25 @@
 Date: 2026-08-29
 Suite: `stage5-retrieval-v1`
 Subject: `stage-aware-retrieval-agent-v1`
-Status: implementation tests passed; formal clean-revision execution pending;
-production deployment not performed
+Status: formal clean-revision local execution passed; production deployment not
+performed
+
+## Auditable local result
+
+- evaluated code revision:
+  `c46f5d3f7d91eb34988091237f7de4cdf57c9784`;
+- fixed Suite SHA-256:
+  `ffc3aa6c5f666d2dc35080ad07c0fd5f75624a326b8e33973ea397c2fc4c4529`;
+- deterministic evidence: `agent-eval-2df884bd95f7`;
+- execution receipt:
+  `agent-eval-execution-ab1bb41eaad549baadaae8bfb3673637`;
+- result: formal pass, with production Planner `8/8` and finite Harness
+  stimuli `4/4` reported separately.
+
+The evidence was generated after the implementation commit passed the clean
+full-revision gate. The later documentation-only commit records these anchors;
+it is not the code revision that was evaluated. Private execution receipts and
+Traces remain Git-ignored and were not committed.
 
 ## What this evaluates
 
@@ -38,12 +55,12 @@ finite Harness stimulus. The scorecard summarizes those groups separately.
 | `eval-trace-tamper-rejected` | Observation is changed without rebuilding the hash chain | Clean Replay succeeds; changed Trace is rejected |
 | `eval-locked-profile-contained` | Harness attempts a `dev` profile action | Reject before the tool handler; measured handler invocations remain zero |
 
-## Current implementation-test result
+## Verified result
 
-All 12 tasks pass in the deterministic pytest execution, which injects a fake
-revision so implementation can be tested in a dirty worktree. This is not a
-formal, auditable Agent Eval run. A real evidence ID must be generated only
-after the main task is committed and the clean-revision gate succeeds.
+All 12 tasks pass both the deterministic pytest execution and the formal local
+execution anchored above. Pytest still injects a fake revision so implementation
+can be tested in a dirty worktree; only the clean-revision execution and its
+evidence ID are an auditable Agent Eval result.
 
 | Metric | Result |
 |---|---:|
