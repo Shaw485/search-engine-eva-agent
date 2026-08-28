@@ -1,9 +1,9 @@
 # Agent optimization workflow
 
 > Status: product direction adopted from Owner feedback on 2026-08-28. This
-> document defines the target loop. Some pieces are already implemented as
-> smoke-only scaffolding; strategy proposal, approval panel and automatic
-> strategy update are future implementation milestones.
+> document defines the target loop. The first smoke-only backend loop now
+> exposes proposal, decision and strategy-catalog APIs; richer bad-case search,
+> dev evaluation and LLM planning remain future milestones.
 
 ## Target product behavior
 
@@ -81,15 +81,23 @@ Agent can experiment without arbitrary code execution.
 
 ## First implementation milestone
 
-Before the web panel, implement the command-line version:
+The first implemented slice is API-first so the portfolio page can act as the
+approval surface:
 
 ```text
-search-quality-agent propose-strategy
-  -> finds worst smoke bad cases
-  -> chooses one allowed strategy candidate
-  -> runs baseline and candidate
+POST /agent/strategy/propose
+  -> finds worst smoke bad cases from the title-BM25 baseline
+  -> tests title-BM25 plus exact coverage/model/phrase boosts
+  -> runs baseline and candidate on the same smoke data
   -> compares Runs
-  -> writes a StrategyProposal artifact
+  -> writes a StrategyProposal artifact under runs/strategy-proposals/
+
+POST /agent/strategy/decision
+  -> records approve/reject under runs/strategy-decisions/
+  -> approve writes runs/search-strategies/catalog.json and active.json
+
+GET /agent/strategy/catalog
+  -> returns approved strategies for the portfolio strategy platform
 ```
 
 The artifact should contain:
@@ -99,8 +107,15 @@ The artifact should contain:
 - bad-case Query examples;
 - aggregate metric deltas;
 - worst regressions;
-- approval status: `pending`, `approved`, `rejected`, or `applied`;
-- safe apply command that works only after approval.
+- approval status: `pending` in the immutable proposal; decisions are separate
+  immutable artifacts keyed by proposal ID;
+- the active runtime strategy path if approval applied a catalog update.
+
+The current candidate strategy is intentionally simple and explainable:
+`candidate-title-bm25-exact-boost-v1`. It adds deterministic boosts for query
+term coverage, numeric/model token matches and exact phrase matches on top of
+title-only BM25. The first smoke evidence shows a small positive nDCG@10 delta,
+but it is not a production rollout decision and does not unlock dev/test.
 
 ## Interview-safe explanation
 
@@ -112,4 +127,3 @@ You can say:
 > an approval panel. Humans decide whether the tradeoff is acceptable; once
 > approved, the system can automatically write a versioned strategy update and
 > rerun validation.
-

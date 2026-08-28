@@ -96,7 +96,8 @@ These three paths should stay separate in your head:
 | Replay | Real | A historical Trace can be checked without rerunning tools. |
 | Planner intelligence | Scaffold | It is deterministic, not an LLM yet. |
 | Data scope | Smoke only | It cannot use 500-query dev or frozen test yet. |
-| Optimization ability | Target behavior | It should propose bounded strategy changes, but only apply them after approval. |
+| Optimization ability | First smoke slice | It can propose one bounded exact-boost strategy, run Harness evidence, and apply only after approval. |
+| Web approval panel | First API-backed slice | The portfolio page can request a proposal and record approve/reject through the backend. |
 
 ## Code map
 
@@ -106,6 +107,7 @@ These three paths should stay separate in your head:
 | Current deterministic Planner | `src/search_quality/agent/planner.py` |
 | Tool schemas and adapters | `src/search_quality/agent/tools.py` |
 | Agent contracts | `src/search_quality/agent/contracts.py` |
+| Strategy proposal loop | `src/search_quality/agent/optimization.py` |
 | Evidence grounding | `src/search_quality/agent/grounding.py` |
 | Trace storage | `src/search_quality/agent/trace.py` |
 | Replay checker | `src/search_quality/agent/replay.py` |

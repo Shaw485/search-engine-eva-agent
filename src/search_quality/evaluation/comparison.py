@@ -33,6 +33,7 @@ _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 _SOURCE_REVISION_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
 _RUN_PREFIX_BY_RANKER_ID = {
     "candidate-random-v1": "random",
+    "candidate-title-bm25-exact-boost-v1": "exact-boost",
     "candidate-title-bm25-v1": "bm25",
     "candidate-title-keyword-overlap-v1": "overlap",
 }

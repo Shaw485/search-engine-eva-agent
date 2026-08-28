@@ -15,6 +15,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse
 
+from search_quality.agent.optimization import (
+    apply_strategy_decision,
+    generate_strategy_proposal,
+    load_strategy_catalog,
+)
 from search_quality.catalog import (
     DEFAULT_CATALOG_INDEX,
     CatalogSearchService,
@@ -65,7 +70,15 @@ async def request_diagnostics(request: Request, call_next):
         ),
         "route": (
             request.url.path
-            if request.url.path in {"/catalog/search", "/health", "/smoke"}
+            if request.url.path
+            in {
+                "/agent/strategy/decision",
+                "/agent/strategy/catalog",
+                "/agent/strategy/propose",
+                "/catalog/search",
+                "/health",
+                "/smoke",
+            }
             else "unmatched"
         ),
         "trace_id": trace_id,
@@ -152,6 +165,19 @@ class CatalogSearchRequest(BaseModel):
     top_k: int = Field(default=10, ge=1, le=20)
 
 
+class StrategyProposalRequest(BaseModel):
+    """Start one approval-gated Agent strategy proposal run."""
+
+    profile: Literal["smoke"] = "smoke"
+
+
+class StrategyDecisionRequest(BaseModel):
+    """Human decision for one pending strategy proposal."""
+
+    proposal_id: str = Field(pattern=r"^proposal-[0-9a-f]{12}$")
+    decision: Literal["approve", "reject"]
+
+
 @app.get("/smoke", deprecated=True)
 def smoke(
     query: str = Query(default="wireless mouse", min_length=1, max_length=200),
@@ -231,6 +257,114 @@ def catalog_search_post(request: CatalogSearchRequest) -> dict:
             detail={
                 "code": "catalog_search_unavailable",
                 "message": "Catalog search unavailable",
+                "trace_id": trace_id,
+            },
+        ) from exc
+
+
+@app.post("/agent/strategy/propose")
+def agent_strategy_propose(request: StrategyProposalRequest) -> dict:
+    """Run the smoke Agent optimization workflow and return a proposal panel."""
+
+    try:
+        return generate_strategy_proposal(
+            project_root=Path(__file__).resolve().parents[2],
+            profile_id=request.profile,
+        )
+    except ValueError as exc:
+        logger.debug(
+            "agent_strategy_proposal_rejected",
+            extra={"error_code": classify_error(exc)},
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_strategy_proposal_request",
+                "message": "Strategy proposal request is invalid",
+                "trace_id": current_trace_id(),
+            },
+        ) from exc
+    except (OSError, RuntimeError) as exc:
+        trace_id = current_trace_id()
+        logger.error(
+            "agent_strategy_proposal_failed",
+            extra={
+                "error_code": classify_error(exc),
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "strategy_proposal_unavailable",
+                "message": "Strategy proposal workflow unavailable",
+                "trace_id": trace_id,
+            },
+        ) from exc
+
+
+@app.get("/agent/strategy/catalog")
+def agent_strategy_catalog() -> dict:
+    """Return approved strategies visible to the portfolio strategy platform."""
+
+    try:
+        return load_strategy_catalog(project_root=Path(__file__).resolve().parents[2])
+    except (OSError, RuntimeError, ValueError) as exc:
+        trace_id = current_trace_id()
+        logger.error(
+            "agent_strategy_catalog_failed",
+            extra={
+                "error_code": classify_error(exc),
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "strategy_catalog_unavailable",
+                "message": "Strategy catalog unavailable",
+                "trace_id": trace_id,
+            },
+        ) from exc
+
+
+@app.post("/agent/strategy/decision")
+def agent_strategy_decision(request: StrategyDecisionRequest) -> dict:
+    """Record a human strategy decision and apply approved configs."""
+
+    try:
+        return apply_strategy_decision(
+            project_root=Path(__file__).resolve().parents[2],
+            proposal_id=request.proposal_id,
+            decision=request.decision,
+        )
+    except ValueError as exc:
+        logger.debug(
+            "agent_strategy_decision_rejected",
+            extra={"error_code": classify_error(exc)},
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_strategy_decision",
+                "message": "Strategy decision is invalid",
+                "trace_id": current_trace_id(),
+            },
+        ) from exc
+    except (OSError, RuntimeError) as exc:
+        trace_id = current_trace_id()
+        logger.error(
+            "agent_strategy_decision_failed",
+            extra={
+                "error_code": classify_error(exc),
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "strategy_decision_unavailable",
+                "message": "Strategy decision workflow unavailable",
                 "trace_id": trace_id,
             },
         ) from exc

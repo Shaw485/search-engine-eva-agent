@@ -26,6 +26,7 @@ stderr. Normal CLI results remain on stdout.
 | `agent_tools` | Allowlisted tool call lifecycle and stable failures | `WARNING` |
 | `agent_trace` | Trace artifact publication | `WARNING` |
 | `agent_replay` | Offline Trace validation and Replay lifecycle | `WARNING` |
+| `agent_optimization` | Strategy proposal, decision and catalog lifecycle | `WARNING` |
 
 The library default is `WARNING`. Verbose ranking events are opt-in because one
 event per Query becomes noisy on larger profiles.
@@ -144,6 +145,11 @@ provider prompts/responses or exception messages. `agent_runtime`,
 `agent_model`, `agent_tools`, `agent_trace` and `agent_replay` can each be
 enabled without enabling the others.
 
+Strategy proposal events use the `agent_optimization` module. They include safe
+proposal, Run and comparison IDs, profile ID, candidate Ranker ID, strategy
+count and stable error codes. Raw Query text, product titles, labels and ranked
+lists stay in ignored evidence artifacts under `runs/`, not in diagnostics.
+
 ## Privacy and public errors
 
 The formatter normalizes case, punctuation and camelCase before recursively
@@ -212,6 +218,10 @@ systemd-analyze cat-config systemd/journald.conf
 10. `agent_trace`: enable only `agent_trace=INFO` to confirm immutable Trace
     publication. Enable only `agent_replay` when isolating schema, hash, state
     or report-validation failures during offline Replay.
+11. `agent_optimization`: enable only `agent_optimization=INFO` while calling
+    `/agent/strategy/propose`, `/agent/strategy/decision` or
+    `/agent/strategy/catalog`; inspect `runs/strategy-proposals/`,
+    `runs/strategy-decisions/` and `runs/search-strategies/` for evidence.
 
 `tests/test_observability.py` and `tests/test_catalog_search.py` verify JSON structure, module isolation,
 redaction variants, error classification, stable events, low-noise defaults and
@@ -223,4 +233,6 @@ strings or exposing internal error causes. Deployment contract tests keep
 Uvicorn access logging disabled in both local and systemd entry points.
 Agent Runtime tests additionally verify independent module control, safe
 success/failure correlation, payload redaction, Trace validation and that
-offline Replay invokes neither Planner nor tools.
+offline Replay invokes neither Planner nor tools. Strategy optimization tests
+verify proposal/decision/catalog behavior and that proposal diagnostics do not
+log raw Query text.

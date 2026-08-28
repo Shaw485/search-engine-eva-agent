@@ -116,3 +116,74 @@ class CandidateTitleBM25Ranker:
                 / (frequency + self.k1 * length_normalization)
             )
         return score
+
+
+class CandidateTitleBM25ExactBoostRanker(CandidateTitleBM25Ranker):
+    """BM25 plus small deterministic exact-token and phrase boosts."""
+
+    ranker_id = "candidate-title-bm25-exact-boost-v1"
+
+    def __init__(
+        self,
+        products: Sequence[CandidateProduct],
+        *,
+        coverage_boost: float = 0.8,
+        numeric_boost: float = 1.0,
+        phrase_boost: float = 1.2,
+        k1: float = 1.5,
+        b: float = 0.75,
+    ) -> None:
+        for name, value in (
+            ("coverage_boost", coverage_boost),
+            ("numeric_boost", numeric_boost),
+            ("phrase_boost", phrase_boost),
+        ):
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and non-negative")
+        super().__init__(products, k1=k1, b=b)
+        self.coverage_boost = coverage_boost
+        self.numeric_boost = numeric_boost
+        self.phrase_boost = phrase_boost
+        self._title_token_sets = {
+            product_key: frozenset(term_counts)
+            for product_key, term_counts in self._term_counts.items()
+        }
+        self._title_token_strings = {
+            product_key: " ".join(tokenize(product.title))
+            for product_key, product in self._products.items()
+        }
+
+    @property
+    def config(self) -> dict[str, str | float | int]:
+        payload = dict(super().config)
+        payload.update(
+            {
+                "coverage_boost": self.coverage_boost,
+                "numeric_boost": self.numeric_boost,
+                "phrase_boost": self.phrase_boost,
+                "ranker_id": self.ranker_id,
+                "score": "title_bm25_plus_query_coverage_numeric_and_phrase_boosts",
+            }
+        )
+        return payload
+
+    def _score(self, query_terms: Sequence[str], product_key: ProductKey) -> float:
+        score = super()._score(query_terms, product_key)
+        title_terms = self._title_token_sets[product_key]
+        query_set = frozenset(query_terms)
+        if query_set:
+            score += self.coverage_boost * (
+                len(query_set & title_terms) / len(query_set)
+            )
+        numeric_terms = tuple(
+            term for term in query_terms if any(char.isdigit() for char in term)
+        )
+        if numeric_terms:
+            matched_numeric = sum(term in title_terms for term in numeric_terms)
+            score += self.numeric_boost * (matched_numeric / len(numeric_terms))
+        if (
+            query_terms
+            and " ".join(query_terms) in self._title_token_strings[product_key]
+        ):
+            score += self.phrase_boost
+        return score

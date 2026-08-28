@@ -10,7 +10,7 @@ from .baselines import (
     CandidateDeterministicRandomRanker,
     CandidateKeywordOverlapRanker,
 )
-from .bm25 import CandidateTitleBM25Ranker
+from .bm25 import CandidateTitleBM25ExactBoostRanker, CandidateTitleBM25Ranker
 
 __all__ = [
     "CandidateDeterministicRandomRanker",
@@ -18,6 +18,7 @@ __all__ = [
     "CandidateProduct",
     "CandidateRanker",
     "CandidateTitleBM25Ranker",
+    "CandidateTitleBM25ExactBoostRanker",
     "ProductKey",
     "RankedProduct",
 ]

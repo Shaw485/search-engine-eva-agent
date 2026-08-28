@@ -28,11 +28,14 @@ per-Query ranking differences. Execution remains smoke-only: the 500-Query dev
 profile is code-locked until the Owner data-boundary checkpoint is recorded, and
 the 8,956-Query frozen test remains unavailable to tuning runs.
 
-A smoke-only Stage 3/4 scaffold now exposes four strictly typed evaluation
-tools through a finite Runtime, branches on comparison observations, and stores
-an offline-replayable Trace. Its planner is deliberately deterministic and no
-LLM is connected yet. This proves the control/evidence path, not completed Agent
-reasoning or a search-quality improvement.
+A smoke-only Stage 3/4 scaffold now exposes strictly typed evaluation tools
+through a finite Runtime, branches on comparison observations, stores an
+offline-replayable Trace, and has an API-first strategy proposal loop for the
+portfolio Agent workbench. The first proposal loop tests
+`candidate-title-bm25-exact-boost-v1` against the title-BM25 baseline and writes
+approve/reject decisions plus approved runtime strategies under ignored
+`runs/`. Its planner is still bounded and deterministic; this proves the
+control/evidence path, not completed LLM reasoning or production search quality.
 
 The optional OpenSearch 3.8.0 adapter, mapping, and Apple Silicon-compatible
 Compose profile are implemented. Live container verification remains pending
@@ -128,6 +131,12 @@ curl --request POST 'http://127.0.0.1:8000/smoke' \
 curl --request POST 'http://127.0.0.1:8000/catalog/search' \
   --header 'Content-Type: application/json' \
   --data '{"query":"wireless mouse","top_k":10}'
+
+curl --request POST 'http://127.0.0.1:8000/agent/strategy/propose' \
+  --header 'Content-Type: application/json' \
+  --data '{"profile":"smoke"}'
+
+curl 'http://127.0.0.1:8000/agent/strategy/catalog'
 ```
 
 ## What the Stage 0 vector result means

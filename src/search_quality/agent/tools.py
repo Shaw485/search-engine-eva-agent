@@ -38,6 +38,7 @@ RUN_ID_RE = re.compile(f"{RUN_ID_PATTERN}\\Z")
 ALLOWED_RANKER_IDS = frozenset(
     {
         "candidate-random-v1",
+        "candidate-title-bm25-exact-boost-v1",
         "candidate-title-keyword-overlap-v1",
         "candidate-title-bm25-v1",
     }
@@ -74,6 +75,7 @@ class EvaluationBoundaryOutput(StrictModel):
 
 RankerId = Literal[
     "candidate-random-v1",
+    "candidate-title-bm25-exact-boost-v1",
     "candidate-title-keyword-overlap-v1",
     "candidate-title-bm25-v1",
 ]
@@ -341,7 +343,9 @@ class CompareRunsOutput(StrictModel):
 
 
 class RunRankerInput(StrictModel):
-    ranker_name: Literal["random", "keyword-overlap", "title-bm25"]
+    ranker_name: Literal[
+        "random", "keyword-overlap", "title-bm25", "title-bm25-exact-boost"
+    ]
 
 
 class EvaluateRunInput(StrictModel):

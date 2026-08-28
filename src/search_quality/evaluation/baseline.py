@@ -28,6 +28,7 @@ from search_quality.ranking import (
     CandidateKeywordOverlapRanker,
     CandidateProduct,
     CandidateRanker,
+    CandidateTitleBM25ExactBoostRanker,
     CandidateTitleBM25Ranker,
     ProductKey,
     RankedProduct,
@@ -47,10 +48,11 @@ REQUIRED_COLUMNS = {
 }
 RUN_SCHEMA_VERSION = "search-evaluation-run-v1"
 DEFAULT_RANDOM_SEED = 17
-RANKER_NAMES = ("random", "keyword-overlap", "title-bm25")
+RANKER_NAMES = ("random", "keyword-overlap", "title-bm25", "title-bm25-exact-boost")
 _RUN_ID_PREFIXES = {
     "keyword-overlap": "overlap",
     "random": "random",
+    "title-bm25-exact-boost": "exact-boost",
     "title-bm25": "bm25",
 }
 _GIT_REVISION_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
@@ -177,6 +179,8 @@ def _build_ranker(
         return CandidateKeywordOverlapRanker(products)
     if ranker_name == "title-bm25":
         return CandidateTitleBM25Ranker(products)
+    if ranker_name == "title-bm25-exact-boost":
+        return CandidateTitleBM25ExactBoostRanker(products)
     raise ValueError(
         f"unsupported ranker {ranker_name!r}; expected one of {RANKER_NAMES}"
     )

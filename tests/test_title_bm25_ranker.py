@@ -4,7 +4,11 @@ import math
 
 import pytest
 
-from search_quality.ranking import CandidateProduct, CandidateTitleBM25Ranker
+from search_quality.ranking import (
+    CandidateProduct,
+    CandidateTitleBM25ExactBoostRanker,
+    CandidateTitleBM25Ranker,
+)
 
 
 @pytest.fixture
@@ -94,3 +98,42 @@ def test_ranker_tie_break_includes_locale() -> None:
         ("uk", "a"),
         ("us", "a"),
     ]
+
+
+def test_exact_boost_prefers_full_phrase_and_model_matches() -> None:
+    ranker = CandidateTitleBM25ExactBoostRanker(
+        [
+            CandidateProduct("us", "phrase", "USB C 65W Fast Charger"),
+            CandidateProduct("us", "loose", "USB Charger Cable C Adapter"),
+            CandidateProduct("us", "other", "Wireless Mouse"),
+        ]
+    )
+
+    results = ranker.rank("usb c 65w")
+
+    assert [result.product_id for result in results] == ["phrase", "loose", "other"]
+    assert results[0].score > results[1].score
+
+
+def test_exact_boost_configuration_records_parameters() -> None:
+    ranker = CandidateTitleBM25ExactBoostRanker(
+        [CandidateProduct("us", "a", "Wireless Mouse")],
+        coverage_boost=0.2,
+        numeric_boost=0.3,
+        phrase_boost=0.4,
+    )
+
+    assert ranker.config == {
+        "analyzer_id": "ascii-alnum-lower-v1",
+        "b": 0.75,
+        "coverage_boost": 0.2,
+        "field": "product_title",
+        "idf_scope": "per_query_judged_candidates",
+        "k1": 1.5,
+        "numeric_boost": 0.3,
+        "phrase_boost": 0.4,
+        "query_terms": "deduplicated",
+        "ranker_id": "candidate-title-bm25-exact-boost-v1",
+        "score": "title_bm25_plus_query_coverage_numeric_and_phrase_boosts",
+        "tie_break": "product_locale_product_id_ascending",
+    }
