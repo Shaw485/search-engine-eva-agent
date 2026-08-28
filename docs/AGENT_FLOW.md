@@ -15,18 +15,19 @@ inconclusive.
 
 ```mermaid
 flowchart TD
-    A[User or fixed Agent task] --> B[Planner decides one next step]
-    B --> C{Runtime Harness policy gate}
-    C -->|allowed| D[Whitelisted tool call]
-    C -->|blocked| X[Failed terminal result]
-    D --> E[Search Evaluation Harness]
-    E --> F[Run, metric, query, or comparison evidence]
-    F --> G[Observation returned to Runtime]
-    G --> H[Trace records action and observation]
-    H --> I{Planner decides again}
-    I -->|needs more evidence| D
-    I -->|enough evidence| J[Final report with evidence refs]
-    J --> K[Offline Replay can reproduce the recorded path]
+    A[1. AgentTask: compare two smoke Runs]
+    B[2. Planner: choose one next step]
+    C[3. Runtime Harness: check policy, budget and schema]
+    D[4. Tool: call Search Evaluation Harness]
+    E[5. Observation: metrics and Query evidence return]
+    F{6. Branch on observation}
+    G[inspect_query: drill into regression]
+    H[finish: accept, reject or inconclusive]
+    I[Trace and Replay: preserve the path]
+
+    A --> B --> C --> D --> E --> F
+    F -->|regression exists| G --> B
+    F -->|enough evidence| H --> I
 ```
 
 The important loop is:
@@ -41,34 +42,15 @@ branches based on the comparison result.
 
 ## What happens in the real smoke run
 
-```mermaid
-sequenceDiagram
-    participant T as AgentTask
-    participant P as FakeBranchingPlanner
-    participant R as Runtime Harness
-    participant C as compare_runs
-    participant Q as inspect_query
-    participant Tr as Trace
-
-    T->>P: compare baseline Run vs candidate Run
-    P->>R: tool action: compare_runs
-    R->>C: validate IDs, policy, capability
-    C-->>R: aggregate deltas + improved/regressed Query lists
-    R->>Tr: record action and observation
-    R->>P: give observation back
-    alt regressions exist
-        P->>R: tool action: inspect_query
-        R->>Q: inspect worst regression Query
-        Q-->>R: ranked candidates, labels, scores
-        R->>Tr: record Query evidence
-        R->>P: give observation back
-        P->>R: finish inconclusive
-    else no regressions and primary metric improves
-        P->>R: finish accept
-    else primary metric regresses
-        P->>R: finish reject
-    end
-    R->>Tr: record terminal result
+```text
+1. Task asks the Agent to compare random and BM25 smoke Runs.
+2. Planner asks Runtime to call compare_runs.
+3. Runtime validates the tool name, capability, Run IDs and schema.
+4. compare_runs returns aggregate metrics and the worst Query regressions.
+5. Planner sees regressions, so it calls inspect_query for the worst one.
+6. The final report says inconclusive and cites both comparison and Query
+   evidence.
+7. Trace records the path, and Replay can check it later.
 ```
 
 For the latest observed path, BM25 improved the average primary metric but still
@@ -150,4 +132,3 @@ You can say:
 > control and evidence path, not final LLM reasoning. The next milestone is an
 > Agent Evaluation Harness with fixed tasks to measure whether the Agent really
 > completes diagnosis work.
-
