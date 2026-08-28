@@ -4,9 +4,9 @@
 >
 > 更新日期：2026-08-28
 >
-> 当前状态：全量商品网站基线已部署；Runtime/Trace 脚手架、exact-boost
-> 优化器与 query-scoped 阶段检索三条切片已实现但尚未整合；阶段检索新切片
-> 尚未部署；Owner 体验与阶段 2 评测内核继续进行
+> 当前状态：全量商品网站基线已部署；query-scoped 阶段检索已接入
+> Runtime/Trace/Replay 并完成本地网页时间线；exact-boost 仍是独立控制器，
+> 阶段检索新切片尚未部署；Owner 体验与阶段 2 评测内核继续进行
 >
 > 使用方式：一次只跨越一个验收门槛；Agent 的任何结论必须能够回到确定性实验结果。
 
@@ -115,12 +115,12 @@ Owner 决定先在现有 `shawspace.cn` 搜索体验页搜索全部 1,814,924 �
 | 0. 工程骨架与搜索 Smoke | 可重复启动的本地搜索后端 | 为工具化提供稳定接口 | **Completed (OpenSearch live check pending)** |
 | 1. ESCI 数据与实验边界 | 可复现 train/dev/test、Manifest、数据报告 | 给 Agent 提供可信数据边界 | **Technical gate passed; learning check pending** |
 | 2. Search Evaluation Harness | 指标、BM25 基线、Run 与对比报告 | Agent 可依赖的确定性工具层 | **In Progress** |
-| 3. 最小搜索评测 Agent | 首个计划—工具—观察—报告闭环 | 第一次可见的真实 Agent 行为 | **In Progress: deterministic scaffold only** |
-| 4. Agent Runtime Harness | 状态机、权限、预算、Trace、Replay | Agent 可控、可恢复、可复现 | **In Progress: local scaffold only** |
+| 3. 最小搜索评测 Agent | 首个计划—工具—观察—报告闭环 | 第一次可见的真实 Agent 行为 | **In Progress: stage-aware deterministic path integrated** |
+| 4. Agent Runtime Harness | 状态机、权限、预算、Trace、Replay | Agent 可控、可恢复、可复现 | **In Progress: local retrieval Trace/Replay integrated** |
 | 5. Agent Evaluation Harness | 黄金任务集和 Agent 成绩单 | 证明 Agent 不是偶然成功 | **Not Started** |
 | 6. 搜索策略与诊断实验室 | Multi-field BM25、Vector、Hybrid、Rerank、Bad Case | Agent 获得更多可组合实验工具 | **In Progress: query-scoped multi-recall + RRF + coarse-rank slice** |
-| 7. 诊断与优化 Agent | 自动发现 Bad Case、提出策略、运行受控实验并请求审批 | 完整的搜索评测与优化 Agent | **In Progress: exact-boost optimizer + stage diagnosis/ablation; separate from Runtime** |
-| 8. Web Agent 工作台与交付 | Agent 工作台、审批面板、搜索对比页、部署与作品集 | 用户可观察计划、工具、证据、Replay 和策略审批 | **In Progress: stage-aware UI implemented locally, not deployed** |
+| 7. 诊断与优化 Agent | 自动发现 Bad Case、提出策略、运行受控实验并请求审批 | 完整的搜索评测与优化 Agent | **In Progress: stage-aware Runtime path + separate exact-boost controller** |
+| 8. Web Agent 工作台与交付 | Agent 工作台、审批面板、搜索对比页、部署与作品集 | 用户可观察计划、工具、证据、Replay 和策略审批 | **In Progress: read-only Runtime Trace UI implemented locally, not deployed** |
 
 与 v0.1 相比，Agent MVP 从原阶段 5 前移到阶段 3；Trace、Replay 和 Agent Eval 也前移。向量与 Rerank 不再是 Agent 出现之前的前置条件。
 
@@ -236,10 +236,12 @@ Agent 循环：
 
 本阶段是作品第一次可以明确展示“Agent”的节点。
 
-当前进度（2026-08-28）：四个 smoke-only 领域工具、受信 Run registry 和
-观察后分支的 `FakeBranchingPlanner` 已形成第一条确定性垂直切片。它用于
-验证 Runtime 与证据链，不是真实 LLM Planner，也尚未满足“至少 10 个固定
-Agent 任务”的完整验收，因此不能对外声称阶段 3 已完成。
+当前进度（2026-08-28）：原有四个 trusted-Run 工具之外，阶段检索任务新增
+两项最小能力：诊断基线与运行受控候选。观察驱动 Planner 已在真实 smoke
+路径上根据门禁结果完成 `uniform 失败 → conservative 通过 → aggressive
+探测失败 → 选择 conservative` 的改道，并生成结构化终态。它仍是确定性
+Planner，不是真实 LLM Planner，也尚未满足“至少 10 个固定 Agent 任务”的
+完整验收，因此不能对外声称阶段 3 已完成。
 
 ### 阶段 4：Agent Runtime Harness、Trace 与 Replay
 
@@ -263,10 +265,13 @@ Agent 任务”的完整验收，因此不能对外声称阶段 3 已完成。
 - 相同 Trace 的证据不会因外部模型变化而消失。
 
 当前进度（2026-08-28）：有限状态、白名单能力、步数/调用/失败/大小预算、
-结构化错误、Trace 与离线 Replay 已有本地脚手架。Trace 的无密钥 SHA-256
-链用于发现损坏，不是数字签名；elapsed budget 只在本地动作之间协作检查，
-不能终止一个永不返回的外部调用。真实模型接入前必须补可强制终止的 worker
-deadline、模型/Prompt/Token/成本版本与更强来源认证。因此阶段 4 仍为进行中。
+结构化错误、Trace 与离线 Replay 已覆盖 trusted-Run 比较和 stage-aware
+retrieval 两类本地任务。阶段检索 Grounding 与 Replay 会重算观察序列允许的
+下一动作，拒绝跳步、重排、门禁篡改和越权工具；工作台只展示经过 Replay
+验证的只读时间线。Trace 的无密钥 SHA-256 链用于发现损坏，不是数字签名；
+elapsed budget 只在本地动作之间协作检查，不能终止一个永不返回的外部调用。
+真实模型接入前必须补可强制终止的 worker deadline、模型/Prompt/Token/成本
+版本与更强来源认证。因此阶段 4 仍为进行中。
 
 ### 阶段 5：Agent Evaluation Harness
 
@@ -399,8 +404,8 @@ Agent 不可以：
 
 ### Now
 
-- 保持 Runtime/Trace 脚手架与确定性优化器的能力边界清晰，不能把两条切片
-  描述成一次已经可 Replay 的完整优化 Agent Run。
+- 以已接入 Runtime 的阶段检索任务作为当前可演示 Agent 路径；exact-boost
+  仍是独立控制器，不能把它描述成同一 Trace 中的动作。
 - 用固定 smoke 集持续验证“诊断 → 多候选实验 → Harness → 七项门禁 →
   提案 → 服务端决策 → 下一轮 active 基线”。
 - 工作台展示根因、候选配置、三项核心指标、七项门禁和逐 Query 前后结果；
@@ -408,19 +413,18 @@ Agent 不可以：
 - 关键知识随进度提供说明但不进行问答；500-Query dev 继续代码锁定。
 - 用 query-scoped 固定边界持续验证“多路召回 → RRF → 粗排 → 12 项门禁”；
   uniform/aggressive 候选失败也必须保留为证据，不能只展示被选结果。
-- 当前阶段检索响应只能生成 Owner-reviewable 证据，不创建审批决定、不更新
-  strategy catalog、不改变 active config，也没有部署到线上工作台。
+- 当前阶段检索响应会同时生成 Run/Comparison/Trace 和 Owner-reviewable
+  证据，但不创建审批决定、不更新 strategy catalog、不改变 active config，
+  也没有部署到线上工作台。
 
 ### Next
 
-- 把诊断、候选搜索、实验和提案动作接入 Agent Runtime，使一次优化可以生成
-  完整 Trace 并在观察变化或工具失败时改道。
 - 建立至少 10 个固定 Agent 任务和 Agent Eval 判定，区分 Runtime 正确与
-  Planner 任务完成质量。
+  Planner 任务完成质量；覆盖成功、无安全提升、工具重试、篡改、跳步和
+  越权诱导。
 - 实现有来源边界的 Query 构造器、分桶与更大已标注验证；不解锁 frozen test。
 - 实现认证 Owner 审批、CSRF、审计身份、验证后生效和可验证回滚。
-- 把 recall/fusion/coarse 的诊断、三个 RRF 候选实验和门禁结果接入 Runtime
-  工具与 Trace；让“uniform 失败 → conservative 通过”的改道可 Replay。
+- 将仍独立的 exact-boost 控制器迁入统一 Runtime 工具与 Trace 契约。
 
 ### Later
 
@@ -503,11 +507,10 @@ Agent 不可以：
 
 ## 10. 当前唯一下一步
 
-把已经实现的 exact-boost 优化器与 stage-aware retrieval 动作统一封装为
-Runtime 工具和观察驱动 Planner：一次 Agent Run 必须能在 Trace 中证明它
-为何判断问题发生在 recall/fusion/coarse，为什么尝试 uniform、conservative
-和 aggressive 候选，为什么因 12 项门禁失败而改道，以及为什么只生成
-Owner-reviewable 提案而不自行激活。随后用固定 Agent 任务集评测这条完整链路。
+为已经打通的 stage-aware Runtime 链路建立第一版 Agent Evaluation Harness：
+至少 10 个固定任务，分别验证工具选择、观察后改道、终态正确、证据引用、
+预算遵守、一次故障恢复和 Replay 忠实度，并与固定工作流的成功率/成本对照。
+同时只设计 Query 构造器的来源、分桶、去重和污染边界，不提前读取 dev/test。
 
 该工作不依赖也不解锁 500-Query dev。更大验证、真实模型 Planner、浏览器
 审批和线上生效仍分别需要数据学习证据、安全机制与 Owner 明确决策；“继续”

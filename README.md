@@ -10,8 +10,8 @@ and shows a panel where a human accepts or rejects the strategy update.
 
 ## Project status
 
-**Full-catalog baseline, Stage 2 Harness, deterministic Agent Runtime scaffold,
-and a query-scoped stage-aware retrieval slice: in progress.** The Owner
+**Full-catalog baseline, Stage 2 Harness, and a deterministic stage-aware Agent
+Runtime vertical slice: in progress.** The Owner
 has prioritized an experience milestone: all 1,814,924 official ESCI products
 must first be searchable on the existing portfolio page, while the optimized
 lane remains closed. This product-search track uses a persistent SQLite FTS5
@@ -28,19 +28,22 @@ per-Query ranking differences. Execution remains smoke-only: the 500-Query dev
 profile is code-locked until the Owner data-boundary checkpoint is recorded, and
 the 8,956-Query frozen test remains unavailable to tuning runs.
 
-A smoke-only Stage 3/4 Runtime scaffold exposes strictly typed evaluation tools,
-branches on comparison observations, and stores an offline-replayable Trace.
-Separately, an API-first deterministic optimizer powers the portfolio Agent
-workbench; these two slices are not yet one Runtime execution or Trace.
+A smoke-only Stage 3/4 Runtime exposes strictly typed evaluation tools, branches
+on observations, enforces budgets and stores an offline-replayable Trace. The
+original trusted-Run comparison task and the stage-aware retrieval task now use
+the same Runtime/Trace/Replay boundary. The exact-boost optimizer remains a
+separate controller and is not represented as a Runtime Trace yet.
 
-A second, local-only stage-aware analysis slice now makes recall, RRF fusion and
-coarse ranking explicit. On the fixed 20-Query fully judged pool it runs the
-title/exact baseline plus uniform, conservative and aggressive multi-field RRF
-candidates, revalidates their evidence and applies 12 retrieval/downstream
-gates. The conservative candidate expanded mean judged recall-union coverage
-from `0.811472` to `0.848741` while preserving all gate floors. This result is
-eligible for Owner review only: the endpoint does not approve a strategy,
-modify the active catalog, affect `/catalog/search` or deploy anything.
+A local-only stage-aware Agent task now makes recall, RRF fusion and coarse
+ranking explicit. On the fixed 20-Query fully judged pool it diagnoses the
+baseline, then uses observations to run uniform, conservative and aggressive
+multi-field RRF candidates under two retrieval-only tool capabilities. Uniform
+fails seven gates, conservative passes all 12, and the bounded aggressive probe
+fails two; the Planner therefore selects conservative and emits
+`proposal_ready`. The complete action/observation path is replay-validated and
+returned to the workbench as a read-only timeline. This result is eligible for
+Owner review only: the endpoint does not approve a strategy, modify the active
+catalog, affect `/catalog/search` or deploy anything.
 
 The optimizer diagnoses title-ranking failure signals, selects a bounded set of
 exact-boost candidates, runs each against the current active baseline, and
@@ -73,6 +76,7 @@ explicit pending integration check, not an implicit fallback or a claimed pass.
 - Agent optimization strategy: [docs/AGENT_OPTIMIZATION_STRATEGY.md](docs/AGENT_OPTIMIZATION_STRATEGY.md)
 - Agent Runtime decision: [docs/adr/003-agent-runtime-mvp.md](docs/adr/003-agent-runtime-mvp.md)
 - Stage-aware retrieval decision: [docs/adr/004-stage-aware-retrieval-agent.md](docs/adr/004-stage-aware-retrieval-agent.md)
+- Stage-aware Runtime/Trace decision: [docs/adr/005-stage-retrieval-runtime-trace.md](docs/adr/005-stage-retrieval-runtime-trace.md)
 - Stage-aware retrieval smoke evidence: [docs/STAGE_AWARE_RETRIEVAL_REPORT.md](docs/STAGE_AWARE_RETRIEVAL_REPORT.md)
 - Required learning: [docs/LEARNING_CHECKPOINTS.md](docs/LEARNING_CHECKPOINTS.md)
 - Decision and contribution provenance: [docs/CONTRIBUTION_LOG.md](docs/CONTRIBUTION_LOG.md)
@@ -163,12 +167,14 @@ curl --request POST 'http://127.0.0.1:8000/agent/retrieval/analyze' \
   --data '{"profile":"smoke"}'
 ```
 
-`/agent/retrieval/analyze` runs the fixed query-scoped stage experiment and
-returns the baseline/candidate stage metrics, diagnoses, all three candidate
-outcomes, 12 gate checks and representative Top-5 evidence. It is an analysis
-route, not an activation route. In the Nginx reference configuration it shares
-the authenticated Agent-workbench boundary and has request access logging
-disabled because its response contains Query and product evidence.
+`/agent/retrieval/analyze` creates a bounded Runtime task, executes two
+allowlisted retrieval tools, validates the terminal Trace through offline
+Replay, and returns the baseline/candidate stage metrics, diagnoses, all three
+candidate outcomes, 12 gate checks, representative Top-5 evidence and a
+privacy-safe action timeline. It is an analysis route, not an activation route.
+In the Nginx reference configuration it shares the authenticated
+Agent-workbench boundary and has request access logging disabled because its
+response contains Query and product evidence.
 
 ## What the Stage 0 vector result means
 
@@ -210,11 +216,12 @@ future evaluation code do not depend on an LLM or an external model API.
 The current stage-aware experiment is a separate query-scoped path:
 
 ```text
-fully judged Query pool
-  -> title BM25 / exact title / optional multi-field BM25 recall
-  -> RRF Top 20
-  -> title-BM25 coarse rank Top 10
-  -> deterministic metrics + 12 gates
+RetrievalOptimizationTask
+  -> Runtime / observation-driven Planner
+  -> diagnose baseline tool
+  -> candidate experiment tool: uniform -> conservative -> aggressive probe
+  -> Search Evaluation Harness + 12 gates
+  -> immutable Trace + offline Replay
   -> Owner-reviewable evidence (no activation)
 ```
 
@@ -276,9 +283,11 @@ not presented as full-catalog recall.
 
 ## Next step
 
-Integrate the stage diagnosis and candidate-ablation actions into the bounded
-Agent Runtime so a single Trace shows why a recall hypothesis was selected, why
-uniform/aggressive fusion was rejected, and why the conservative candidate was
-sent to Owner review. The Owner still needs to complete the Stage 1 data-boundary
-and Stage 2 metric learning evidence before the 500-Query dev profile is
-explicitly unlocked. Frozen test stays closed until a milestone release gate.
+Build the first fixed Agent Evaluation Harness set (at least 10 tasks) around
+the completed stage-aware Trace path. It must score task success, tool choice,
+grounding, bounded recovery and Replay fidelity, and include altered-gate,
+reordered-action and tool-failure cases. In parallel, define the source-bounded
+Query constructor that will later feed larger labeled validation without
+unlocking frozen test. The Owner still needs to complete the Stage 1
+data-boundary and Stage 2 metric learning evidence before the 500-Query dev
+profile is explicitly unlocked.

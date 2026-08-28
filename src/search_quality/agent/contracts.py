@@ -39,6 +39,8 @@ class TerminalOutcome(StrEnum):
     ACCEPT = "accept"
     REJECT = "reject"
     INCONCLUSIVE = "inconclusive"
+    PROPOSAL_READY = "proposal_ready"
+    NO_SAFE_IMPROVEMENT = "no_safe_improvement"
 
 
 class AgentTask(StrictModel):
@@ -56,6 +58,42 @@ class AgentTask(StrictModel):
         if self.baseline_run_id == self.candidate_run_id:
             raise ValueError("comparison Runs must differ")
         return self
+
+
+RetrievalPipelineVariant = Literal[
+    "title-exact-multifield-v1",
+    "title-exact-multifield-weighted-v1",
+    "title-exact-multifield-weighted-aggressive-v1",
+]
+
+RETRIEVAL_PIPELINE_VARIANTS: tuple[RetrievalPipelineVariant, ...] = (
+    "title-exact-multifield-v1",
+    "title-exact-multifield-weighted-v1",
+    "title-exact-multifield-weighted-aggressive-v1",
+)
+
+
+class RetrievalOptimizationTask(StrictModel):
+    """One smoke-only stage diagnosis and bounded retrieval optimization task."""
+
+    task_id: StrictStr = Field(pattern=SAFE_ID_FIELD_PATTERN)
+    task_type: Literal["optimize_retrieval_stages"] = "optimize_retrieval_stages"
+    profile: Literal["smoke"] = "smoke"
+    objective: Literal["expand_recall_without_downstream_regression"] = (
+        "expand_recall_without_downstream_regression"
+    )
+    candidate_variants: tuple[RetrievalPipelineVariant, ...] = (
+        RETRIEVAL_PIPELINE_VARIANTS
+    )
+
+    @model_validator(mode="after")
+    def validate_candidate_space(self) -> Self:
+        if self.candidate_variants != RETRIEVAL_PIPELINE_VARIANTS:
+            raise ValueError("retrieval candidate space must use the trusted order")
+        return self
+
+
+RuntimeTask = AgentTask | RetrievalOptimizationTask
 
 
 class ToolAction(StrictModel):

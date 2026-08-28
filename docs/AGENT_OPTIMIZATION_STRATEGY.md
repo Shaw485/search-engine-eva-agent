@@ -1,10 +1,10 @@
 # Agent optimization strategy
 
-> Status: adopted product direction; the first bounded, deterministic optimizer
-> is implemented on the smoke profile. A separate stage-aware retrieval slice
-> now evaluates multi-field recall, RRF fusion and coarse ranking. Neither slice
-> is yet one Runtime Trace. This document separates what is executable now from
-> the target system so the project does not overclaim.
+> Status: adopted product direction. The stage-aware retrieval optimizer now
+> evaluates multi-field recall, RRF fusion and coarse ranking inside the bounded
+> Runtime and emits a replay-validated Trace. The older exact-boost optimizer is
+> still a separate controller. This document separates what is executable now
+> from the target system so the project does not overclaim.
 
 ## Outcome
 
@@ -303,9 +303,15 @@ candidates per round and 30 tool calls. Repeating an identical strategy/config
 hash is forbidden. These are technical safeguards, not a promise that smoke
 evidence is sufficient for launch.
 
-The current stage-aware orchestrator always runs exactly three allowlisted RRF
-candidates. It is deterministic orchestration outside the Runtime budget/Trace
-loop; moving those actions into the Runtime is the immediate integration step.
+The current stage-aware task is inside the Runtime. It has exactly two
+capabilities (`diagnose_smoke_retrieval` and `experiment_smoke_retrieval`), at
+most eight steps, six tool calls, five Run-creation attempts, three failures and
+one global retry allowance for the exact failed action. The real smoke path is
+baseline → uniform failed → conservative passed → aggressive probe failed →
+conservative selected. If
+uniform passes, the Planner stops early; if no candidate passes, it returns
+`no_safe_improvement`. Grounding and Replay independently recompute the only
+valid next action from the ordered observations.
 
 ## What proves the Agent
 

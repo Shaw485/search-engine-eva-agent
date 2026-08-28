@@ -16,7 +16,7 @@ from search_quality.evaluation.artifacts import write_immutable_text
 from .contracts import (
     AgentDecision,
     AgentState,
-    AgentTask,
+    RuntimeTask,
     StrictModel,
     TerminalResult,
     ToolObservation,
@@ -60,7 +60,7 @@ class AgentTrace(StrictModel):
     trace_id: StrictStr = Field(pattern=rf"^{TRACE_ID_PATTERN}$")
     runtime_id: Literal["search-agent-runtime-v1"] = "search-agent-runtime-v1"
     planner_id: StrictStr
-    task: AgentTask
+    task: RuntimeTask
     policy: dict[str, Any]
     tool_names: list[StrictStr]
     events: list[TraceEvent] = Field(min_length=1)
@@ -94,7 +94,7 @@ def compute_trace_context_hash(
     *,
     trace_id: str,
     planner_id: str,
-    task: AgentTask,
+    task: RuntimeTask,
     policy: dict[str, Any],
     tool_names: list[str],
 ) -> str:
@@ -180,6 +180,7 @@ class TraceStore:
             raise ValueError("Trace store must be a directory")
 
     def store(self, trace: AgentTrace) -> Path:
+        self._require_trusted_root()
         path = self.root / f"trace-{trace.trace_id}.json"
         if path.is_symlink():
             raise ValueError("Trace artifact must not be a symbolic link")
@@ -208,6 +209,7 @@ class TraceStore:
     def load(self, trace_id: str) -> AgentTrace:
         if not isinstance(trace_id, str) or not re_fullmatch_trace_id(trace_id):
             raise ValueError("invalid Trace ID")
+        self._require_trusted_root()
         path = self.root / f"trace-{trace_id}.json"
         if path.is_symlink() or not path.is_file():
             raise ValueError("Trace artifact is unavailable")
@@ -236,6 +238,17 @@ class TraceStore:
         if trace.trace_id != trace_id:
             raise ValueError("Trace filename does not match its ID")
         return trace
+
+    def _require_trusted_root(self) -> None:
+        try:
+            if (
+                self.root.is_symlink()
+                or not self.root.is_dir()
+                or self.root.resolve(strict=True) != self.root
+            ):
+                raise ValueError("Trace store root changed after initialization")
+        except OSError as exc:
+            raise ValueError("Trace store root is unavailable") from exc
 
 
 def re_fullmatch_trace_id(value: str) -> bool:

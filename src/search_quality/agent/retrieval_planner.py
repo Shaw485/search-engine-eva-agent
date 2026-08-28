@@ -82,19 +82,19 @@ def _analyze_history(
     expected_variant: RetrievalPipelineVariant | None = None
     baseline_run_id: str | None = None
     experiments: list[CandidateExperimentPayload] = []
-    retry_used = False
+    retry_consumed = False
 
     for observation in observations:
         if observation.tool_name != expected_tool:
             raise ValueError("retrieval observation tool order is invalid")
         if observation.status == "failed":
             _validate_failed_observation(observation)
-            if observation.retryable and not retry_used:
-                retry_used = True
+            if observation.retryable and not retry_consumed:
+                retry_consumed = True
                 continue
             reason = (
                 "retrieval_tool_retry_exhausted"
-                if retry_used
+                if observation.retryable and retry_consumed
                 else "retrieval_tool_failed"
             )
             decision = FinishDecision(
@@ -109,7 +109,6 @@ def _analyze_history(
             return _History(decision=decision, experiments=tuple(experiments))
 
         _validate_success_observation(observation)
-        retry_used = False
         if expected_tool == DIAGNOSE_BASELINE_TOOL:
             envelope = BaselineDiagnosisOutput.model_validate(
                 {

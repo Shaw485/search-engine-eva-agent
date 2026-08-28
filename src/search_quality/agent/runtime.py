@@ -17,8 +17,8 @@ from .contracts import (
     SAFE_ID_PATTERN,
     AgentDecision,
     AgentState,
-    AgentTask,
     FinishDecision,
+    RuntimeTask,
     TerminalOutcome,
     TerminalResult,
     ToolAction,
@@ -43,6 +43,9 @@ runtime_logger = logging.getLogger("search_quality.agent_runtime")
 planner_logger = logging.getLogger("search_quality.agent_model")
 tool_logger = logging.getLogger("search_quality.agent_tools")
 decision_adapter = TypeAdapter(AgentDecision)
+RUN_CREATING_TOOLS = frozenset(
+    {"run_ranker", "diagnose_baseline_retrieval", "run_retrieval_candidate"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,7 +121,7 @@ class AgentRuntime:
         self.trace_store = trace_store
         self.policy = policy or RuntimePolicy()
 
-    def run(self, task: AgentTask) -> TerminalResult:
+    def run(self, task: RuntimeTask) -> TerminalResult:
         trace_id = new_trace_id()
         recorder = TraceRecorder(
             trace_id,
@@ -256,7 +259,7 @@ class AgentRuntime:
                         tool_calls_used=tool_calls_used,
                         reason_code="tool_call_budget_exhausted",
                     )
-                if decision.tool_name == "run_ranker":
+                if decision.tool_name in RUN_CREATING_TOOLS:
                     if run_creations >= self.policy.max_run_creations:
                         return self._fail(
                             task=task,
@@ -302,7 +305,11 @@ class AgentRuntime:
                     "agent_tool_started",
                     extra={"step": steps_used, "tool_name": logged_tool_name},
                 )
-                observation, policy_violation = self._execute_tool(task, decision)
+                observation, policy_violation = self._execute_tool(
+                    task,
+                    decision,
+                    observations=tuple(observations),
+                )
                 duration_ms = self._elapsed_ms(tool_started)
                 tool_logger.log(
                     logging.DEBUG
@@ -369,7 +376,11 @@ class AgentRuntime:
             )
 
     def _execute_tool(
-        self, task: AgentTask, decision: ToolAction
+        self,
+        task: RuntimeTask,
+        decision: ToolAction,
+        *,
+        observations: tuple[ToolObservation, ...],
     ) -> tuple[ToolObservation, bool]:
         evidence_ref: str | None = None
         payload: dict[str, Any] = {}
@@ -377,7 +388,7 @@ class AgentRuntime:
         retryable = False
         policy_violation = False
         try:
-            validate_action_scope(task, decision)
+            validate_action_scope(task, decision, observations)
             result = self.tools.execute(
                 decision.tool_name,
                 decision.arguments,
@@ -431,7 +442,7 @@ class AgentRuntime:
     def _complete(
         self,
         *,
-        task: AgentTask,
+        task: RuntimeTask,
         recorder: TraceRecorder,
         observations: list[ToolObservation],
         state: AgentState,
@@ -476,7 +487,7 @@ class AgentRuntime:
     def _fail(
         self,
         *,
-        task: AgentTask,
+        task: RuntimeTask,
         recorder: TraceRecorder,
         observations: list[ToolObservation],
         state: AgentState,
@@ -523,7 +534,7 @@ class AgentRuntime:
         return result
 
     def _store_trace(
-        self, *, task: AgentTask, recorder: TraceRecorder, result: TerminalResult
+        self, *, task: RuntimeTask, recorder: TraceRecorder, result: TerminalResult
     ) -> None:
         trace = AgentTrace(
             trace_id=recorder.trace_id,

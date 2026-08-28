@@ -134,6 +134,46 @@ def test_runtime_branches_on_regression_and_trace_replays_without_tools(
     assert replayed == result
 
 
+def test_replay_trace_returns_the_exact_single_loaded_snapshot(
+    tmp_path: Path, smoke_runs: tuple[dict, dict]
+) -> None:
+    runtime, task, trace_store = _real_runtime(tmp_path, smoke_runs)
+    result = runtime.run(task)
+
+    class SingleLoadStore:
+        def __init__(self, delegate: TraceStore) -> None:
+            self.delegate = delegate
+            self.load_count = 0
+
+        def load(self, trace_id: str):
+            self.load_count += 1
+            if self.load_count > 1:
+                raise AssertionError("Replay snapshot was loaded more than once")
+            return self.delegate.load(trace_id)
+
+    store = SingleLoadStore(trace_store)
+    snapshot = TraceReplayer(store).replay_trace(result.trace_id)
+
+    assert store.load_count == 1
+    assert snapshot.terminal == result
+
+
+def test_trace_store_rejects_root_replaced_by_symlink(
+    tmp_path: Path, smoke_runs: tuple[dict, dict]
+) -> None:
+    runtime, task, trace_store = _real_runtime(tmp_path, smoke_runs)
+    result = runtime.run(task)
+    original_root = trace_store.root
+    moved_root = tmp_path / "moved-traces"
+    replacement_root = tmp_path / "replacement-traces"
+    original_root.rename(moved_root)
+    replacement_root.mkdir()
+    original_root.symlink_to(replacement_root, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="root changed"):
+        trace_store.load(result.trace_id)
+
+
 def test_task_policy_can_skip_query_inspection(
     tmp_path: Path, smoke_runs: tuple[dict, dict]
 ) -> None:

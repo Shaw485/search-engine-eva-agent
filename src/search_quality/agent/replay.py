@@ -10,6 +10,7 @@ from search_quality.observability import logging_context
 from .contracts import (
     AgentState,
     FinishDecision,
+    RetrievalOptimizationTask,
     TerminalOutcome,
     ToolAction,
     ToolObservation,
@@ -19,6 +20,7 @@ from .grounding import validate_action_scope, validate_finish_grounding
 from .reporting import build_terminal_report
 from .trace import (
     ZERO_HASH,
+    AgentTrace,
     TraceStore,
     compute_event_hash,
     compute_terminal_hash,
@@ -49,6 +51,11 @@ class TraceReplayer:
         self.store = store
 
     def replay(self, trace_id: str):
+        return self.replay_trace(trace_id).terminal
+
+    def replay_trace(self, trace_id: str) -> AgentTrace:
+        """Return the exact validated snapshot without loading it a second time."""
+
         safe_trace_id = (
             trace_id
             if isinstance(trace_id, str) and re_fullmatch_trace_id(trace_id)
@@ -111,7 +118,11 @@ class TraceReplayer:
                         action = ToolAction.model_validate(event.decision)
                         pending_tool_name = action.tool_name
                         try:
-                            validate_action_scope(trace.task, action)
+                            validate_action_scope(
+                                trace.task,
+                                action,
+                                tuple(observations),
+                            )
                         except AgentPolicyError as exc:
                             pending_scope_error = exc.code
                         action_count += 1
@@ -216,6 +227,7 @@ class TraceReplayer:
                     raise ValueError("Trace step count does not replay")
                 max_steps = trace.policy.get("max_steps")
                 max_tool_calls = trace.policy.get("max_tool_calls")
+                max_run_creations = trace.policy.get("max_run_creations")
                 if (
                     isinstance(max_steps, bool)
                     or not isinstance(max_steps, int)
@@ -223,6 +235,9 @@ class TraceReplayer:
                     or isinstance(max_tool_calls, bool)
                     or not isinstance(max_tool_calls, int)
                     or max_tool_calls < 1
+                    or isinstance(max_run_creations, bool)
+                    or not isinstance(max_run_creations, int)
+                    or max_run_creations < 1
                 ):
                     raise ValueError("Trace runtime policy is malformed")
                 if (
@@ -230,6 +245,34 @@ class TraceReplayer:
                     or trace.terminal.tool_calls_used > max_tool_calls
                 ):
                     raise ValueError("Trace terminal counts exceed policy")
+                run_creation_count = sum(
+                    event.decision is not None
+                    and event.decision.get("tool_name")
+                    in {
+                        "run_ranker",
+                        "diagnose_baseline_retrieval",
+                        "run_retrieval_candidate",
+                    }
+                    for event in trace.events
+                    if event.event_type == "action_selected"
+                )
+                if run_creation_count > max_run_creations:
+                    raise ValueError("Trace Run creations exceed policy")
+                if isinstance(trace.task, RetrievalOptimizationTask):
+                    from .retrieval_tools import (
+                        DIAGNOSE_BASELINE_TOOL,
+                        RETRIEVAL_TOOL_CAPABILITIES,
+                        RUN_CANDIDATE_TOOL,
+                    )
+
+                    if trace.tool_names != sorted(
+                        {DIAGNOSE_BASELINE_TOOL, RUN_CANDIDATE_TOOL}
+                    ):
+                        raise ValueError("Retrieval Trace tool registry is not minimal")
+                    if trace.policy.get("allowed_capabilities") != sorted(
+                        RETRIEVAL_TOOL_CAPABILITIES
+                    ):
+                        raise ValueError("Retrieval Trace capabilities are not minimal")
                 observed_refs = {
                     item.evidence_ref
                     for item in observations
@@ -259,4 +302,4 @@ class TraceReplayer:
                     "terminal_state": trace.terminal.state,
                 },
             )
-            return trace.terminal
+            return trace

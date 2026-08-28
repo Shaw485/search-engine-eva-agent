@@ -53,6 +53,7 @@
 | D-020 | Agent 工作台必须接真实后端：点开始后后台跑 smoke Harness、找 Bad Case、提出候选策略、返回指标与样本证据；Owner 点击更新/拒绝，批准后策略进入策略平台 | **Owner 主动提出并明确反对“只是预览”** | Owner 定义交互和审批边界；**Codex 设计并实现** API-first smoke-only proposal/decision/catalog 后端闭环与首个 exact-boost 候选策略 | **Owner** 决定产品体验必须闭环；Codex 选择 `candidate-title-bm25-exact-boost-v1` 作为首个受控候选策略并实现 | Codex 实现后端 proposal/decision/catalog、策略目录、前端工作台 API 接入、策略平台读取、模块化诊断与测试；当前审批只允许服务器 loopback Owner 通道，浏览器按钮和线上搜索生效尚未实现，也不解锁 dev/test | Owner-originated product requirement + Codex technical design/implementation |
 | D-021 | Agent 的分析、提案和对比必须升级为复杂但可控的优化策略，并允许后续用算法或模型增强；模型不得获得 Codex/平台私钥，必须由服务端 Owner 凭据或本地模型接入 | **Owner 主动提出**：“agent的分析，提案，对比。这应该是很复杂的策略”；并表示愿意提供模型额度方向 | Owner 定义“更强优化 Agent”目标；**Codex 设计**“诊断→有界候选→Harness→回归门禁→审批”架构、模型/密钥安全边界和首版工程默认门禁 | Owner 决定继续建设复杂优化 Agent；尚未独立选择模型、费用预算或正式门禁阈值。当前工程默认阈值不冒充 Owner 产品政策 | Codex 实现 smoke 根因诊断、参数化 exact-boost、多候选实验、透明相对选择分、七项可信门禁、Run/Comparison 重验、完整 active revision 与当前部署 revision 检查、候选完整 Ranker config 绑定、跨进程审批锁和工作台可视化；批准后下一轮以 active 策略为基线。未使用或提交任何 API Key | Owner-originated product direction + Codex technical design/implementation; model/provider policy pending Owner decision |
 | D-022 | 工作台按钮要能自主判断是否需要多路召回或粗排等阶段能力，自己运行候选实验和 Harness，再把证据交给 Owner 批准；首个实现使用 query-scoped 多路词法召回、RRF、粗排和 12 项门禁 | **Owner 主动要求**按钮达到“分析需要增加多路召回/增加粗排然后优化”的水平，并最终明确说“执行” | Owner 定义自动诊断/实验/人工批准的产品方向；**Codex 提出**固定 20-Query fully judged pool、title/exact/multi-field 通道、RRF Top 20、title-BM25 coarse Top 10、三个权重候选和 12 项工程门禁 | **Owner 批准执行该产品方向**；没有证据表明 Owner 独立选择了算法、权重、pool、cutoff 或阈值，这些仍是 Codex 方案 | Codex 实现 stage contracts、严格重验、三候选 ablation、stage diagnosis、Harness comparison、API/工作台证据与测试；conservative 候选本地 smoke 通过 12 门禁。当前只请求 Owner review，不写 decision/catalog/active，不改变线上搜索，也未声明部署 | Owner-originated capability decision + Codex-proposed/implemented technical slice |
+| D-023 | 将 stage-aware retrieval 真正放入统一 Agent Runtime：两个最小白名单工具、观察驱动 Planner、Grounding、预算、不可变 Trace/Replay 和网页只读时间线；仍不授予审批或激活权限 | 延续 Owner 对“按钮自行分析、实验、比较并交给人决策”的要求；本轮 Owner 说“继续”授权推进 | **Codex 设计** `RetrievalOptimizationTask`、两项 capability、uniform/conservative/aggressive 的有界观察分支、终态语义、Trace 网页契约和 ADR；Owner 没有独立选择这些 Runtime 参数或分支算法 | Owner 授权继续实现既定方向；未批准浏览器审批、自动激活、500-Query dev 或部署 | Codex 编写/整合 Runtime、工具、Planner、Grounding、Replay、API、网页时间线、日志、测试和文档；真实 smoke 路径为 uniform 失败七门禁、conservative 全通过、aggressive 失败两门禁，最终 `proposal_ready`；后端 376 项、前端 46 项及真实响应契约联调通过 | Owner-originated product direction + Codex-designed/implemented Runtime integration; no activation/deployment authority |
 
 ### 尚未拍板的提案
 
@@ -80,6 +81,8 @@
 - 明确要求工作台按钮能自主判断是否需要多路召回、粗排等阶段能力，自动实验
   和 Harness 比较后再由人批准，并以“执行”批准开始实现；Owner 没有据此
   认领具体 RRF 权重或门禁阈值的原创。
+- 以“继续”授权把既定 stage-aware 方向推进到 Runtime/Trace 网页可视化；这
+  是执行授权，不代表 Owner 独立设计了 Tool Schema、预算、Planner 或 Replay。
 - 定义作品集入口和搜索体验页的关键交互、信息取舍，并通过实际页面反馈推动修正。
 - 定义软件必须具备模块化日志、独立排障、脱敏、生产降噪和保留说明等质量要求。
 - 保留关键政策的最终拍板权；目前明确批准了 `esci-primary-v1` 相关性政策。
@@ -104,6 +107,9 @@
 - 设计并实现 query-scoped stage-aware retrieval：显式 title/exact/multi-field
   召回通道、RRF、粗排、stage lineage、严格证据重验、三个候选 ablation 与
   12 项门禁，并记录 conservative 通过、uniform/aggressive 失败的 smoke 证据。
+- 将 stage-aware retrieval 接入统一 Runtime：新增严格任务/工具契约、观察驱动
+  Planner、动作 Grounding、失败预算、Trace/Replay 语义验证、API 摘要和网页
+  只读时间线，并完成真实后端响应到前端契约的联调。
 - 运行自动测试、数据校验和 smoke 实验，并把证据写入报告和 Git commits。
 - 讲解搜索原理、提示关键知识，并维护学习检查点和本归因台账。
 

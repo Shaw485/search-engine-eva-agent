@@ -70,7 +70,7 @@ def test_retrieval_analysis_endpoint_returns_stage_evidence(
         assert kwargs["profile_id"] == "smoke"
         return expected
 
-    monkeypatch.setattr(api, "generate_retrieval_analysis", analyze)
+    monkeypatch.setattr(api, "generate_retrieval_runtime_analysis", analyze)
 
     assert api.agent_retrieval_analyze(api.RetrievalAnalysisRequest()) == expected
 
@@ -83,6 +83,60 @@ def test_retrieval_analysis_route_has_a_strict_success_contract() -> None:
     )
     assert route.response_model is api.RetrievalAnalysisResponse
     assert api.RetrievalAnalysisResponse.model_config["extra"] == "forbid"
+
+
+def test_runtime_response_rejects_two_failed_attempts_before_success() -> None:
+    baseline = {
+        "evidence_ref": "run:retrieval-aaaaaaaaaaaa",
+        "failed_gates": [],
+        "gate_passed": None,
+        "pipeline_variant": None,
+        "reason_code": "diagnose_retrieval_baseline",
+        "retryable": False,
+        "sequence": 1,
+        "status": "succeeded",
+        "tool_name": "diagnose_baseline_retrieval",
+    }
+    failed = {
+        "evidence_ref": None,
+        "failed_gates": [],
+        "gate_passed": None,
+        "pipeline_variant": "title-exact-multifield-v1",
+        "reason_code": "test_uniform_multifield_fusion",
+        "retryable": True,
+        "status": "failed",
+        "tool_name": "run_retrieval_candidate",
+    }
+    succeeded = {
+        **failed,
+        "evidence_ref": "comparison:retrieval-comparison-bbbbbbbbbbbb",
+        "gate_passed": False,
+        "failed_gates": ["fusion_mrr_at_10_floor"],
+        "retryable": False,
+        "status": "succeeded",
+    }
+    with pytest.raises(ValueError, match="failed action retry"):
+        api.RetrievalAgentRunResponse.model_validate(
+            {
+                "actions": [
+                    baseline,
+                    {**failed, "sequence": 2},
+                    {**failed, "sequence": 3},
+                    {**succeeded, "sequence": 4},
+                ],
+                "outcome": "proposal_ready",
+                "planner_id": "stage-aware-retrieval-planner-v1",
+                "reason_code": "conservative_candidate_selected",
+                "replay_supported": True,
+                "runtime_id": "search-agent-runtime-v1",
+                "schema_version": "retrieval-agent-run-summary-v1",
+                "state": "completed",
+                "steps_used": 5,
+                "tool_calls_used": 4,
+                "trace_id": "c" * 32,
+            },
+            strict=True,
+        )
 
 
 def test_retrieval_analysis_failure_is_safe(
@@ -98,7 +152,7 @@ def test_retrieval_analysis_failure_is_safe(
     def fail(**_kwargs):
         raise ValueError("private query, product title and /private/path")
 
-    monkeypatch.setattr(api, "generate_retrieval_analysis", fail)
+    monkeypatch.setattr(api, "generate_retrieval_runtime_analysis", fail)
     with logging_context(trace_id="retrieval-api-safe"):
         with pytest.raises(HTTPException) as captured:
             api.agent_retrieval_analyze(api.RetrievalAnalysisRequest())

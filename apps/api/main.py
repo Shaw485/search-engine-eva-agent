@@ -10,11 +10,11 @@ import threading
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.responses import JSONResponse
 
 from search_quality.agent.optimization import (
@@ -24,7 +24,7 @@ from search_quality.agent.optimization import (
     generate_strategy_proposal,
     load_strategy_catalog,
 )
-from search_quality.agent.retrieval_analysis import generate_retrieval_analysis
+from search_quality.agent.retrieval_runtime import generate_retrieval_runtime_analysis
 from search_quality.catalog import (
     DEFAULT_CATALOG_INDEX,
     CatalogSearchService,
@@ -294,7 +294,128 @@ class StrategyProposalRequest(BaseModel):
 class RetrievalAnalysisRequest(BaseModel):
     """Run the fixed smoke-only stage-aware retrieval analysis."""
 
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     profile: Literal["smoke"] = "smoke"
+
+
+RetrievalGateName = Literal[
+    "unique_relevant_contribution",
+    "union_coverage_improvement",
+    "fusion_recall_at_10_floor",
+    "fusion_ndcg_at_10_floor",
+    "fusion_mrr_at_10_floor",
+    "coarse_recall_at_10_floor",
+    "coarse_ndcg_at_10_floor",
+    "coarse_mrr_at_10_floor",
+    "worst_query_coarse_ndcg_delta_floor",
+    "regressed_query_rate_ceiling",
+    "worst_query_fusion_ndcg_delta_floor",
+    "fusion_regressed_query_rate_ceiling",
+]
+
+
+class RetrievalAgentActionResponse(BaseModel):
+    """One privacy-safe action/observation pair exposed to the workbench."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    evidence_ref: str | None = Field(
+        default=None,
+        pattern=(
+            r"^(?:run:retrieval-[0-9a-f]{12}|"
+            r"comparison:retrieval-comparison-[0-9a-f]{12})$"
+        ),
+    )
+    failed_gates: list[RetrievalGateName] = Field(max_length=12)
+    gate_passed: bool | None
+    pipeline_variant: (
+        Literal[
+            "title-exact-multifield-v1",
+            "title-exact-multifield-weighted-v1",
+            "title-exact-multifield-weighted-aggressive-v1",
+        ]
+        | None
+    )
+    reason_code: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    retryable: bool
+    sequence: int = Field(ge=1)
+    status: Literal["succeeded", "failed"]
+    tool_name: Literal[
+        "diagnose_baseline_retrieval",
+        "run_retrieval_candidate",
+    ]
+
+    @model_validator(mode="after")
+    def validate_action_observation_pair(self) -> Self:
+        is_baseline = self.tool_name == "diagnose_baseline_retrieval"
+        if is_baseline and self.pipeline_variant is not None:
+            raise ValueError("baseline action must not declare a pipeline variant")
+        if not is_baseline and self.pipeline_variant is None:
+            raise ValueError("candidate action must declare a pipeline variant")
+        if self.status == "failed":
+            if (
+                self.evidence_ref is not None
+                or self.gate_passed is not None
+                or self.failed_gates
+                or not self.retryable
+            ):
+                raise ValueError("recoverable failed action shape is invalid")
+            return self
+        if self.retryable or self.evidence_ref is None:
+            raise ValueError("successful action shape is invalid")
+        if is_baseline:
+            if self.gate_passed is not None or self.failed_gates:
+                raise ValueError("baseline action must not declare gate evidence")
+            if not self.evidence_ref.startswith("run:"):
+                raise ValueError("baseline evidence must reference a Run")
+        elif (
+            not self.evidence_ref.startswith("comparison:")
+            or self.gate_passed is None
+            or self.gate_passed is not (not self.failed_gates)
+        ):
+            raise ValueError("candidate gate evidence shape is invalid")
+        return self
+
+
+class RetrievalAgentRunResponse(BaseModel):
+    """Replay-validated Runtime summary; the full Trace remains server-side."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    actions: list[RetrievalAgentActionResponse] = Field(min_length=1, max_length=6)
+    outcome: Literal["proposal_ready", "no_safe_improvement"]
+    planner_id: Literal["stage-aware-retrieval-planner-v1"]
+    reason_code: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    replay_supported: Literal[True]
+    runtime_id: Literal["search-agent-runtime-v1"]
+    schema_version: Literal["retrieval-agent-run-summary-v1"]
+    state: Literal["completed"]
+    steps_used: int = Field(ge=1, le=8)
+    tool_calls_used: int = Field(ge=1, le=6)
+    trace_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+    @model_validator(mode="after")
+    def validate_runtime_counts_and_recovery(self) -> Self:
+        if self.tool_calls_used != len(self.actions):
+            raise ValueError("tool call count must match action summary")
+        if self.steps_used != self.tool_calls_used + 1:
+            raise ValueError("completed Runtime requires one terminal step")
+        for index, action in enumerate(self.actions):
+            if action.sequence != index + 1:
+                raise ValueError("action sequence must be contiguous")
+            if action.status != "failed":
+                continue
+            if index + 1 >= len(self.actions):
+                raise ValueError("failed action must have a recorded retry")
+            retry = self.actions[index + 1]
+            if (
+                retry.status != "succeeded"
+                or retry.tool_name != action.tool_name
+                or retry.pipeline_variant != action.pipeline_variant
+            ):
+                raise ValueError("failed action retry must preserve action scope")
+        return self
 
 
 class RetrievalAnalysisResponse(BaseModel):
@@ -303,6 +424,7 @@ class RetrievalAnalysisResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     aggregate: dict
+    agent_run: RetrievalAgentRunResponse
     candidate_aggregate: dict
     candidate_diagnosis: dict
     candidate_diagnosis_id: str = Field(pattern=r"^stage-diagnosis-[0-9a-f]{12}$")
@@ -456,7 +578,7 @@ def agent_retrieval_analyze(request: RetrievalAnalysisRequest) -> dict:
     """Diagnose recall, fusion and coarse-rank evidence before proposing changes."""
 
     try:
-        return generate_retrieval_analysis(
+        return generate_retrieval_runtime_analysis(
             project_root=PROJECT_ROOT,
             artifact_root=_agent_artifact_root(),
             profile_id=request.profile,

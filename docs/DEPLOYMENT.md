@@ -86,6 +86,11 @@ Only `/search-agent.html`, the proposal endpoint and the stage-aware
 experience, strategy page, catalog search and approved strategy catalog stay
 public. The exact decision location deliberately returns 404 even with
 credentials; human decisions are owner-only and must use the loopback API.
+The retrieval location has a 130-second read timeout because its bounded
+Runtime policy allows at most 120 seconds. This is a synchronous smoke-only
+bridge; before larger data or concurrent use, replace it with a queued worker,
+pollable task status and force-terminable job deadline rather than extending the
+HTTP timeout again.
 
 ## Install or replace the index
 

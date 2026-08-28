@@ -22,8 +22,10 @@ from search_quality.agent.retrieval_planner import (
     expected_retrieval_decision,
     validate_retrieval_plan_semantics,
 )
+from search_quality.agent.retrieval_runtime import _summarize_action
 from search_quality.agent.retrieval_tools import (
     RETRIEVAL_TOOL_CAPABILITIES,
+    RUN_CANDIDATE_TOOL,
     BaselineDiagnosisPayload,
     StageRetrievalTools,
 )
@@ -32,6 +34,39 @@ from search_quality.agent.trace import AgentTrace, TraceStore
 from search_quality.observability import configure_logging, logging_context
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_action_summary_preserves_a_retry_without_exposing_failed_payload() -> None:
+    observation = _failed_observation(
+        RUN_CANDIDATE_TOOL,
+        retryable=True,
+        suffix="f",
+    )
+
+    summary = _summarize_action(
+        {
+            "arguments": {
+                "baseline_run_id": "retrieval-aaaaaaaaaaaa",
+                "pipeline_variant": "title-exact-multifield-v1",
+            },
+            "reason_code": "test_uniform_multifield_fusion",
+            "tool_name": RUN_CANDIDATE_TOOL,
+        },
+        observation.model_dump(mode="json"),
+        2,
+    )
+
+    assert summary == {
+        "evidence_ref": None,
+        "failed_gates": [],
+        "gate_passed": None,
+        "pipeline_variant": "title-exact-multifield-v1",
+        "reason_code": "test_uniform_multifield_fusion",
+        "retryable": True,
+        "sequence": 2,
+        "status": "failed",
+        "tool_name": RUN_CANDIDATE_TOOL,
+    }
 
 
 @dataclass(frozen=True)
@@ -343,6 +378,19 @@ def test_planner_stops_on_uniform_pass_and_retries_only_once(
     assert isinstance(exhausted, FinishDecision)
     assert exhausted.outcome == TerminalOutcome.INCONCLUSIVE
     assert exhausted.reason_code == "retrieval_tool_retry_exhausted"
+
+    later_failure = _failed_observation(
+        RUN_CANDIDATE_TOOL,
+        retryable=True,
+        suffix="c",
+    )
+    global_retry_exhausted = expected_retrieval_decision(
+        task,
+        (first_failure, baseline, later_failure),
+    )
+    assert isinstance(global_retry_exhausted, FinishDecision)
+    assert global_retry_exhausted.outcome == TerminalOutcome.INCONCLUSIVE
+    assert global_retry_exhausted.reason_code == "retrieval_tool_retry_exhausted"
 
 
 def test_planner_finishes_no_safe_improvement_or_selects_aggressive_from_gates(

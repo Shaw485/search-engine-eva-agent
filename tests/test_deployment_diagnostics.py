@@ -54,6 +54,7 @@ def test_agent_page_and_analysis_endpoints_require_basic_auth() -> None:
     assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in retrieval
     assert "proxy_pass http://127.0.0.1:8010/agent/retrieval/analyze;" in retrieval
     assert 'proxy_set_header Authorization "";' in retrieval
+    assert "proxy_read_timeout 130s;" in retrieval
 
 
 def test_catalog_artifact_is_read_only_and_configured_for_service_user() -> None:

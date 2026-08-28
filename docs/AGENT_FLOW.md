@@ -12,10 +12,11 @@ publication.
 
 ## What is implemented now
 
-There are three real smoke-only slices. They share evidence principles, but they
-are not yet one Runtime execution.
+There are two smoke-only Runtime task families plus one older exact-boost
+controller. They share evidence principles, but only the trusted-Run comparison
+and stage-aware retrieval paths currently produce Runtime Trace/Replay evidence.
 
-### A. Agent Runtime scaffold
+### A. Agent Runtime and trusted-Run comparison
 
 ```mermaid
 flowchart LR
@@ -66,10 +67,13 @@ The first round starts from title BM25. After an approved config exists, the
 next round uses that exact config as its baseline and skips duplicate
 candidates.
 
-### C. Query-scoped stage-aware retrieval analysis
+### C. Stage-aware retrieval Agent task
 
 ```mermaid
 flowchart LR
+    T[RetrievalOptimizationTask]
+    P[observation-driven Planner]
+    X[bounded Runtime]
     Q[20 fully judged Query pools]
     B[title BM25 plus exact-title baseline]
     M[add multi-field BM25 recall]
@@ -78,8 +82,11 @@ flowchart LR
     A[aggressive RRF]
     R[title-BM25 coarse rank]
     H[12 trusted gates]
+    Z[immutable Trace plus Replay]
     O[Owner-reviewable evidence]
 
+    T --> P --> X
+    X -->|diagnose baseline tool| Q
     Q --> B
     Q --> M
     B --> U
@@ -91,15 +98,18 @@ flowchart LR
     U --> R
     C --> R
     A --> R
-    R --> H --> O
+    R --> H -->|observation returns to Planner| P
+    P -->|terminal decision| Z --> O
 ```
 
 This slice distinguishes relevant products lost at recall, fusion and coarse
-rank. It runs all three RRF candidates rather than asking the Owner to choose
-weights manually. Uniform and aggressive candidates fail downstream gates; the
-conservative candidate passes all 12 smoke checks and becomes eligible for
-review. “Eligible” is not “approved” or “active”: this path writes Runs,
-diagnoses and comparisons only.
+rank. The Planner first observes the baseline diagnosis, then tests uniform.
+Because uniform fails seven gates it changes course to conservative; after that
+passes, it performs one bounded aggressive upside probe, which fails two gates,
+and selects conservative. Grounding recomputes the only valid next action before
+each tool call, while Replay recomputes the path without invoking the Planner or
+tools. “Eligible” is not “approved” or “active”: this path writes Runs,
+diagnoses, comparisons and a Trace only.
 
 ## What the website can and cannot do
 
@@ -109,6 +119,7 @@ diagnoses and comparisons only.
 | Show diagnosis, candidate experiments, three core metrics, gates and ten Query comparisons | Implemented |
 | Start stage-aware retrieval analysis | Implemented locally through `POST /agent/retrieval/analyze`; reference Nginx config requires Agent credentials |
 | Show recall/fusion/coarse metrics, all RRF candidates, gates and product Top 5 evidence | Implemented locally; not yet claimed deployed |
+| Show the ordered Runtime actions, reasons, gate outcomes, evidence IDs and Trace ID | Implemented locally as a read-only timeline; validated against the backend response |
 | Approve or reject from the public browser | Intentionally disabled |
 | Approve from the server's loopback Owner channel | Implemented with evidence revalidation, trusted gates, active revision check and file lock |
 | Make `/catalog/search` use the approved strategy | Not implemented |
@@ -127,15 +138,15 @@ Query -> tokenizer/index -> ranker -> ranked products
 Search Evaluation Harness
 ranked products + ESCI labels -> metrics -> Run + Comparison
 
-Optimization controller
-evidence -> diagnosis -> bounded candidates -> Harness -> proposal -> Owner gate
+Optimization Agent Runtime
+task -> Planner -> allowlisted tools -> observations -> Harness -> Trace -> Owner gate
 ```
 
 | System | Main question | Current example |
 |---|---|---|
 | Search | What products should this Query return? | full-catalog SQLite FTS title baseline |
 | Search evaluation | Did one Ranker beat another? | smoke nDCG/MRR/Success and per-Query Diff |
-| Optimization | Which safe experiment should run next? | exact-boost grid with regression gates |
+| Optimization | Which safe experiment should run next? | stage-aware observation branch plus 12 gates |
 
 ## Code map
 
@@ -147,25 +158,28 @@ evidence -> diagnosis -> bounded candidates -> Harness -> proposal -> Owner gate
 | Trace and Replay | `src/search_quality/agent/trace.py`, `replay.py` |
 | Optimizer orchestration | `src/search_quality/agent/optimization.py` |
 | Diagnosis, candidate search, selection score and gates | `src/search_quality/agent/strategy_search.py` |
-| Stage-aware retrieval orchestration | `src/search_quality/agent/retrieval_analysis.py` |
+| Stage-aware Runtime entry | `src/search_quality/agent/retrieval_runtime.py` |
+| Stage-aware Planner and semantic validator | `src/search_quality/agent/retrieval_planner.py` |
+| Stage-aware allowlisted tools and response builder | `src/search_quality/agent/retrieval_tools.py` |
 | Recall channels, RRF and coarse pipeline | `src/search_quality/retrieval/` |
 | Retrieval evidence revalidation and gates | `src/search_quality/evaluation/retrieval_validation.py`, `retrieval_comparison.py` |
 | Search Evaluation Harness | `src/search_quality/evaluation/` |
 
 ## Next integration
 
-The project becomes one fuller Agent when the exact-boost and stage-aware
-optimizer actions are expressed as Runtime tools and decisions, so a Trace can
-prove why it diagnosed recall/fusion/coarse loss, selected a candidate, changed
-course after a failed gate, or stopped with `requires_engineering`. A future
-model adapter can then replace only the hypothesis-selection portion under the
-same schema, budget and permission boundary.
+The stage-aware path is now one Runtime execution. The immediate proof step is
+an Agent Evaluation Harness with at least ten fixed tasks that scores tool
+selection, grounding, bounded recovery, terminal accuracy and Replay fidelity.
+The separate exact-boost controller can later be migrated behind the same task,
+tool and Trace contracts. A future model adapter may replace only the untrusted
+hypothesis-selection portion under the same schema, budget and permission
+boundary.
 
 The remaining product path is:
 
 ```text
-optimizer tools inside Runtime
--> Agent evaluation tasks
+fixed Agent evaluation tasks
+-> source-bounded Query constructor
 -> larger labeled validation
 -> authenticated Owner approval
 -> active full-catalog strategy
@@ -174,10 +188,10 @@ optimizer tools inside Runtime
 
 ## Interview-safe explanation
 
-> I currently have three complementary smoke-only slices: a bounded Agent Runtime
-> that can compare trusted Runs with Trace/Replay, plus deterministic exact-boost
-> and stage-aware retrieval optimizers. The retrieval slice exposes multi-route
-> recall, RRF and coarse-rank losses, runs three bounded fusion candidates and
-> sends only a 12-gate-passing candidate to Owner review. These slices are not
-> yet one Runtime Trace, and the selected candidate is neither active nor
-> deployed. Runtime integration is the next milestone.
+> I currently have a bounded smoke-only Agent Runtime with two task families.
+> For stage-aware retrieval it diagnoses the baseline, observes seven failed
+> uniform gates, changes course to conservative, performs a bounded aggressive
+> probe, and sends only the 12-gate-passing conservative candidate to Owner
+> review. The full action/observation path is stored as an offline-replayable
+> Trace. It is still deterministic, smoke-only and not an approval or deployment
+> system; Agent Eval, larger validation and production activation remain next.

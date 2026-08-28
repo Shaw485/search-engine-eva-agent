@@ -71,6 +71,30 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
   Owner 要求不再以问答中断执行，因此不能把阅读该图记作掌握证据。
 - 状态：**Explanation delivered; independent verification pending**
 
+## 当前插入知识：Runtime Harness 与 Search Harness 分工不同
+
+【必学知识提醒】
+
+- 当前知识：Agent Runtime Harness 控制“Agent 能做什么、做几步、失败如何
+  重试、怎样留下 Trace”；Search Evaluation Harness 负责“搜索方案的指标
+  是多少、候选是否通过相关性门禁”。Trace/Replay 证明行为链可追溯，不会
+  自动证明搜索质量更好。
+- 为什么现在必须理解：工作台现在同时展示 Agent 动作和 12 项搜索门禁；
+  如果把两者混成同一个 Harness，就会把“Agent 按流程运行成功”误说成
+  “搜索策略已经可上线”，或把“指标通过”误说成“Agent 没有越权”。
+- 最低掌握范围：能把一次运行拆成两层：Runtime 调度并约束工具，搜索 Harness
+  生成 Run/Comparison/指标；能说明 Replay 只读复核历史行为，不重新搜索。
+- 具体例子：本轮 Runtime 先调用基线诊断工具，再根据 uniform 的七项失败
+  门禁调用 conservative；conservative 通过后仍执行一次 bounded aggressive
+  probe，后者失败两项门禁，因此终态选择 conservative。12 项门禁由 Search
+  Harness 计算；调用顺序、预算、权限和 Trace 由 Runtime Harness 保证。
+- 失败边界：正常路径创建 4 个 Run，预算最多 5 个，因此整次任务只有 1 次
+  全局重试额度；第二个独立工具故障会安全停止，而不是继续消耗资源。
+- 验证证据：`docs/adr/005-stage-retrieval-runtime-trace.md`、本地真实 Trace
+  与网页只读时间线；2026-08-28 已随实现进度直接说明，不能把“继续”记作
+  Owner 已独立掌握。
+- 状态：**Explanation delivered; independent verification pending**
+
 ## 当前插入知识：优化 Agent 与人工审批边界
 
 【必学知识提醒】

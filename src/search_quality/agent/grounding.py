@@ -12,6 +12,8 @@ from search_quality.evaluation.comparison import COMPARISON_EPSILON
 from .contracts import (
     AgentTask,
     FinishDecision,
+    RetrievalOptimizationTask,
+    RuntimeTask,
     TerminalOutcome,
     ToolAction,
     ToolObservation,
@@ -20,8 +22,23 @@ from .contracts import (
 from .errors import AgentPolicyError
 
 
-def validate_action_scope(task: AgentTask, action: ToolAction) -> None:
+def validate_action_scope(
+    task: RuntimeTask,
+    action: ToolAction,
+    observations: Iterable[ToolObservation] = (),
+) -> None:
     """Keep every identifier-bearing action inside the current comparison task."""
+
+    if isinstance(task, RetrievalOptimizationTask):
+        from .retrieval_planner import expected_retrieval_decision
+
+        try:
+            expected = expected_retrieval_decision(task, tuple(observations))
+        except (TypeError, ValueError) as exc:
+            raise AgentPolicyError("retrieval_history_invalid") from exc
+        if not isinstance(expected, ToolAction) or action != expected:
+            raise AgentPolicyError("retrieval_action_outside_task_scope")
+        return
 
     arguments = action.arguments
     if action.tool_name == "compare_runs":
@@ -38,7 +55,7 @@ def validate_action_scope(task: AgentTask, action: ToolAction) -> None:
 
 
 def validate_finish_grounding(
-    task: AgentTask,
+    task: RuntimeTask,
     decision: FinishDecision,
     observations: Iterable[ToolObservation],
 ) -> None:
@@ -57,6 +74,19 @@ def validate_finish_grounding(
             raise AgentPolicyError("unknown_evidence_reference")
 
     cited = tuple(successful_by_ref[ref] for ref in decision.evidence_refs)
+    if isinstance(task, RetrievalOptimizationTask):
+        from .retrieval_planner import validate_retrieval_plan_semantics
+
+        try:
+            validate_retrieval_plan_semantics(
+                task,
+                tuple(observed_items),
+                decision,
+            )
+        except (TypeError, ValueError) as exc:
+            raise AgentPolicyError("retrieval_finish_not_grounded") from exc
+        return
+
     comparisons: list[ToolObservation] = []
     for item in cited:
         _validate_observation_scope(task, item)

@@ -194,7 +194,14 @@ explicit unsupported proposal request is a debug-level
 contract failures—including unexpected `ValueError`—emit the privacy-safe
 ERROR event `agent_strategy_proposal_failed` and return a generic HTTP 503.
 
-The stage-aware retrieval slice uses three independently controlled modules.
+The stage-aware retrieval slice uses five independently controlled modules.
+`agent_runtime` records the bounded task lifecycle and terminal outcome;
+`agent_tools` records the two allowlisted retrieval-tool boundaries. Both use
+only Trace/evidence IDs, tool names, profile, counts, stable reason/error codes
+and pipeline variants. They never log tool arguments or observation payloads.
+The retrieval Runtime completion/failure bridge includes `agent_trace_id` while
+the standard `trace_id` remains the API request correlation ID, so concurrent
+requests can be joined to the exact private Trace without logging its contents.
 `retrieval` emits run/channel/fusion lifecycle events such as
 `retrieval_run_started`, `retrieval_query_completed`,
 `rrf_fusion_completed` and `retrieval_run_completed` with only profile,
@@ -297,6 +304,10 @@ systemd-analyze cat-config systemd/journald.conf
 14. `retrieval_analysis`: enable only `retrieval_analysis=INFO`; filter by
     `comparison_id`, `candidate_run_id` or `pipeline_run_id` to inspect bounded
     experiment publication without enabling either retrieval or diagnosis logs.
+    The current `/agent/retrieval/analyze` entry is orchestrated by
+    `agent_runtime`; enable `agent_runtime=INFO,agent_tools=INFO` to isolate the
+    ordered Agent/tool boundaries, then enable `retrieval` or `stage_diagnosis`
+    only when the lower-level search stage is the suspected fault.
 
 `tests/test_observability.py` and `tests/test_catalog_search.py` verify JSON structure, module isolation,
 redaction variants, error classification, stable events, low-noise defaults and
@@ -314,4 +325,7 @@ log raw Query text.
 Retrieval and stage-diagnosis tests additionally verify independent module
 control, label-blind inputs, dev-before-read locking, privacy-safe success and
 failure events, immutable artifact storage and that analysis cannot activate a
-strategy.
+strategy. Retrieval Runtime component and API tests also verify minimal
+capabilities, bounded retry, semantic action order, Trace/Replay consistency and
+that the browser summary contains evidence IDs and gate names rather than raw
+Query or product content.

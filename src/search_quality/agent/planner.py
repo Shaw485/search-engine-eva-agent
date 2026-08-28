@@ -12,8 +12,8 @@ from search_quality.evaluation.comparison import COMPARISON_EPSILON
 from .contracts import (
     AgentDecision,
     AgentState,
-    AgentTask,
     FinishDecision,
+    RuntimeTask,
     TerminalOutcome,
     ToolAction,
     ToolObservation,
@@ -22,7 +22,7 @@ from .contracts import (
 
 @dataclass(frozen=True, slots=True)
 class PlannerView:
-    task: AgentTask
+    task: RuntimeTask
     state: AgentState
     observations: tuple[ToolObservation, ...]
     steps_used: int
