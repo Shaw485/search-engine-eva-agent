@@ -93,6 +93,27 @@ revalidated before comparison. Exact IDs should be cited from the generated
 analysis response for the clean code revision that is under review; this report
 does not invent IDs from a dirty development tree.
 
+### Clean-revision evidence
+
+The analysis was rerun from clean revision
+`9be9eb31409317d719b018ac12520928e27a61f2` with status `proposal_ready`.
+
+| Evidence | Content-addressed ID |
+|---|---|
+| Baseline pipeline | `pipeline-82f7693ed3c3` |
+| Baseline retrieval Run | `retrieval-7df0aba74533` |
+| Baseline diagnosis | `stage-diagnosis-a4e05a99335c` |
+| Selected candidate pipeline | `pipeline-95a246096d53` |
+| Selected candidate Run | `retrieval-eea85ed08937` |
+| Selected candidate diagnosis | `stage-diagnosis-21e1ced991bf` |
+| Baseline/candidate Comparison | `retrieval-comparison-93fb997f6d5c` |
+
+The selected experiment is
+`title-exact-multifield-weighted-v1`, using RRF channel weights
+`1.0 / 1.0 / 0.1` for title BM25, exact title and multi-field BM25. These IDs
+bind this report to reproducible artifacts for that revision; content addressing
+detects mutation but is not an authentication or source-trust mechanism.
+
 The Owner defined the required product behavior: one button should let the
 Agent diagnose stages, run bounded experiments through the Harness and present
 evidence for an approval decision, and then said “执行”. Codex proposed and implemented this
