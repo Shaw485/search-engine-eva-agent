@@ -1,8 +1,10 @@
 # Agent optimization strategy
 
 > Status: adopted product direction; the first bounded, deterministic optimizer
-> is implemented on the smoke profile. This document separates what is
-> executable now from the target system so the project does not overclaim.
+> is implemented on the smoke profile. A separate stage-aware retrieval slice
+> now evaluates multi-field recall, RRF fusion and coarse ranking. Neither slice
+> is yet one Runtime Trace. This document separates what is executable now from
+> the target system so the project does not overclaim.
 
 ## Outcome
 
@@ -41,6 +43,31 @@ of metric truth, approval authority, or production write access.
 | Optimization Agent | Bad Case selection, diagnosis, candidate selection and experiment sequencing | Bypassing policy or approving itself |
 | Optional model provider | Bounded hypothesis generation and proposal wording | Computing metrics, code execution or activation |
 | Owner | Accepting or rejecting the product trade-off | Manually running every experiment |
+
+## Implemented stage-aware retrieval slice
+
+The current retrieval analysis runs inside a deliberately closed boundary:
+each of 20 smoke Queries is searched only against its fully judged ESCI product
+pool. It must not be described as full-catalog Recall or production quality.
+
+```text
+title BM25 recall ─────┐
+exact-title recall ────┼─> RRF Top 20 -> title-BM25 coarse Top 10 -> Harness
+multi-field BM25 ──────┘
+```
+
+The baseline omits multi-field recall. The Agent then runs uniform,
+conservative (`1.0 / 1.0 / 0.1`) and aggressive (`1.0 / 0.5 / 0.25`) RRF
+experiments. The conservative candidate increased mean judged recall-union
+coverage from `0.8114716964` to `0.8487412085`, preserved fusion/coarse metric
+floors and passed all 12 retrieval gates. Uniform and aggressive variants are
+retained as failed evidence, not hidden after selection.
+
+This slice stops at `request_owner_review`. It persists only Runs, stage
+diagnoses and comparisons; it does not write proposal decisions, add an active
+catalog strategy, change `/catalog/search` or deploy. See
+[the smoke report](STAGE_AWARE_RETRIEVAL_REPORT.md) and
+[ADR 004](adr/004-stage-aware-retrieval-agent.md).
 
 ## Optimization loop
 
@@ -124,6 +151,12 @@ The MVP uses a small deterministic grid. As the space grows, successive
 halving or Bayesian optimization may reduce experiment cost, but neither
 replaces the Harness.
 
+The query-scoped stage slice has now implemented the first bounded multi-field
+recall/RRF/coarse-rank family. Its three weight sets are Codex-proposed
+engineering candidates. The Owner decided that the product should autonomously
+diagnose, experiment and request approval, but has not independently selected
+these weights as product policy.
+
 ### 6. Compare every candidate with the same baseline
 
 Every comparison uses the same Query set, labels, product snapshot and policy.
@@ -157,6 +190,13 @@ Among candidates that pass all seven smoke gates, a transparent relative
 `selection_score` orders experiments using metric gains, regression rate and
 worst-regression magnitude. Its zero point has no accept/reject meaning; only
 the trusted gates determine eligibility.
+
+Stage-aware retrieval uses a separate 12-check policy,
+`closed-retrieval-experiment-gates-v1`: unique multi-field contribution and
+union-coverage gain; non-decreasing fusion/coarse Recall@10, nDCG@10 and MRR@10;
+worst-Query nDCG floors of `-0.02`; and fusion/coarse regression-rate ceilings
+of `0.10`. These are also Codex engineering defaults, not Owner-approved
+production thresholds.
 
 ### 8. Produce one reviewable proposal
 
@@ -239,6 +279,9 @@ winner; that narrower boundary must not be reused for untrusted model output.
 | Bad Case miner and diagnosis | Partial deterministic slice | Scan every smoke Query and attach title-signal causes; severity scoring, traffic weights and bucket quotas are next |
 | Strategy registry/search | First exact-boost slice implemented | Instantiate bounded candidates and select an experiment |
 | Release-gate evaluator | First smoke slice implemented | Apply versioned aggregate and regression rules |
+| Stage diagnosis | Implemented, query-scoped smoke | Attribute judged relevant loss to recall, RRF fusion or coarse ranking after strict Run revalidation |
+| Multi-route retrieval + RRF ablation | Implemented, query-scoped smoke | Run title/exact/multi-field channels and compare uniform, conservative and aggressive fusion weights |
+| Retrieval comparison gates | Implemented, query-scoped smoke | Recompute evidence and apply 12 coverage, quality and Query-regression checks |
 | Model adapter | Designed, not connected | Optional untrusted hypothesis planner with cost controls |
 | Approval/validation/rollback controller | Partial smoke slice | Server-only evidence revalidation, trusted gates, parent revision check and serialized catalog activation are implemented; larger-set validation and rollback are next |
 | Research watcher | Planned, read-only | Turn new search research into experiment hypotheses, never into direct updates |
@@ -259,6 +302,10 @@ The first full Runtime target allows at most three optimization rounds, four
 candidates per round and 30 tool calls. Repeating an identical strategy/config
 hash is forbidden. These are technical safeguards, not a promise that smoke
 evidence is sufficient for launch.
+
+The current stage-aware orchestrator always runs exactly three allowlisted RRF
+candidates. It is deterministic orchestration outside the Runtime budget/Trace
+loop; moving those actions into the Runtime is the immediate integration step.
 
 ## What proves the Agent
 

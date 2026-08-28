@@ -34,10 +34,11 @@ def test_proxy_disables_request_line_access_log() -> None:
     assert "proxy_pass" not in decision
 
 
-def test_only_agent_page_and_proposal_endpoint_require_basic_auth() -> None:
+def test_agent_page_and_analysis_endpoints_require_basic_auth() -> None:
     nginx = (ROOT / "deploy/nginx-search-eval.conf").read_text(encoding="utf-8")
     agent_page = _nginx_location(nginx, "= /search-agent.html")
     proposal = _nginx_location(nginx, "= /search-eval-api/agent/strategy/propose")
+    retrieval = _nginx_location(nginx, "= /search-eval-api/agent/retrieval/analyze")
 
     assert 'auth_basic "Search Agent";' in agent_page
     assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in agent_page
@@ -48,6 +49,11 @@ def test_only_agent_page_and_proposal_endpoint_require_basic_auth() -> None:
     assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in proposal
     assert "proxy_pass http://127.0.0.1:8010/agent/strategy/propose;" in proposal
     assert 'proxy_set_header Authorization "";' in proposal
+
+    assert 'auth_basic "Search Agent";' in retrieval
+    assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in retrieval
+    assert "proxy_pass http://127.0.0.1:8010/agent/retrieval/analyze;" in retrieval
+    assert 'proxy_set_header Authorization "";' in retrieval
 
 
 def test_catalog_artifact_is_read_only_and_configured_for_service_user() -> None:
@@ -75,6 +81,9 @@ def test_agent_runtime_store_is_the_only_writable_service_path() -> None:
     assert "EnvironmentFile=/etc/search-engine-eva-agent.env" in service
     assert f"Environment=SEARCH_AGENT_ARTIFACT_ROOT={runtime}" in service
     assert "Environment=SEARCH_LOG_LEVEL_AGENT_OPTIMIZATION=INFO" in service
+    assert "Environment=SEARCH_LOG_LEVEL_RETRIEVAL=INFO" in service
+    assert "Environment=SEARCH_LOG_LEVEL_RETRIEVAL_ANALYSIS=INFO" in service
+    assert "Environment=SEARCH_LOG_LEVEL_STAGE_DIAGNOSIS=INFO" in service
     assert "ProtectSystem=strict" in service
     assert "ReadOnlyPaths=/var/www/search-engine-eva-agent" in service
     assert f"ReadWritePaths={runtime}" in service

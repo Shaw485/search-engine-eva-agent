@@ -10,8 +10,8 @@ and shows a panel where a human accepts or rejects the strategy update.
 
 ## Project status
 
-**Full-catalog baseline, Stage 2 Harness, and deterministic Agent Runtime
-scaffold: in progress.** The Owner
+**Full-catalog baseline, Stage 2 Harness, deterministic Agent Runtime scaffold,
+and a query-scoped stage-aware retrieval slice: in progress.** The Owner
 has prioritized an experience milestone: all 1,814,924 official ESCI products
 must first be searchable on the existing portfolio page, while the optimized
 lane remains closed. This product-search track uses a persistent SQLite FTS5
@@ -32,6 +32,15 @@ A smoke-only Stage 3/4 Runtime scaffold exposes strictly typed evaluation tools,
 branches on comparison observations, and stores an offline-replayable Trace.
 Separately, an API-first deterministic optimizer powers the portfolio Agent
 workbench; these two slices are not yet one Runtime execution or Trace.
+
+A second, local-only stage-aware analysis slice now makes recall, RRF fusion and
+coarse ranking explicit. On the fixed 20-Query fully judged pool it runs the
+title/exact baseline plus uniform, conservative and aggressive multi-field RRF
+candidates, revalidates their evidence and applies 12 retrieval/downstream
+gates. The conservative candidate expanded mean judged recall-union coverage
+from `0.811472` to `0.848741` while preserving all gate floors. This result is
+eligible for Owner review only: the endpoint does not approve a strategy,
+modify the active catalog, affect `/catalog/search` or deploy anything.
 
 The optimizer diagnoses title-ranking failure signals, selects a bounded set of
 exact-boost candidates, runs each against the current active baseline, and
@@ -63,6 +72,8 @@ explicit pending integration check, not an implicit fallback or a claimed pass.
 - Agent optimization workflow: [docs/AGENT_OPTIMIZATION_WORKFLOW.md](docs/AGENT_OPTIMIZATION_WORKFLOW.md)
 - Agent optimization strategy: [docs/AGENT_OPTIMIZATION_STRATEGY.md](docs/AGENT_OPTIMIZATION_STRATEGY.md)
 - Agent Runtime decision: [docs/adr/003-agent-runtime-mvp.md](docs/adr/003-agent-runtime-mvp.md)
+- Stage-aware retrieval decision: [docs/adr/004-stage-aware-retrieval-agent.md](docs/adr/004-stage-aware-retrieval-agent.md)
+- Stage-aware retrieval smoke evidence: [docs/STAGE_AWARE_RETRIEVAL_REPORT.md](docs/STAGE_AWARE_RETRIEVAL_REPORT.md)
 - Required learning: [docs/LEARNING_CHECKPOINTS.md](docs/LEARNING_CHECKPOINTS.md)
 - Decision and contribution provenance: [docs/CONTRIBUTION_LOG.md](docs/CONTRIBUTION_LOG.md)
 - Logging and independent diagnostics: [docs/LOGGING.md](docs/LOGGING.md)
@@ -146,7 +157,18 @@ curl --request POST 'http://127.0.0.1:8000/agent/strategy/propose' \
   --data '{"profile":"smoke"}'
 
 curl 'http://127.0.0.1:8000/agent/strategy/catalog'
+
+curl --request POST 'http://127.0.0.1:8000/agent/retrieval/analyze' \
+  --header 'Content-Type: application/json' \
+  --data '{"profile":"smoke"}'
 ```
+
+`/agent/retrieval/analyze` runs the fixed query-scoped stage experiment and
+returns the baseline/candidate stage metrics, diagnoses, all three candidate
+outcomes, 12 gate checks and representative Top-5 evidence. It is an analysis
+route, not an activation route. In the Nginx reference configuration it shares
+the authenticated Agent-workbench boundary and has request access logging
+disabled because its response contains Query and product evidence.
 
 ## What the Stage 0 vector result means
 
@@ -184,6 +206,17 @@ compared with relevance metrics rather than raw cross-backend scores.
 
 The embedding provider is intentionally separate from storage. Search and
 future evaluation code do not depend on an LLM or an external model API.
+
+The current stage-aware experiment is a separate query-scoped path:
+
+```text
+fully judged Query pool
+  -> title BM25 / exact title / optional multi-field BM25 recall
+  -> RRF Top 20
+  -> title-BM25 coarse rank Top 10
+  -> deterministic metrics + 12 gates
+  -> Owner-reviewable evidence (no activation)
+```
 
 ## Optional OpenSearch smoke
 
@@ -243,8 +276,9 @@ not presented as full-catalog recall.
 
 ## Next step
 
-Build, benchmark and deploy the full-catalog baseline so the Owner can record
-real search failures on the website. That experience does not count as a
-relevance evaluation. In parallel, the Owner still needs to complete the Stage
-1 data-boundary and Stage 2 metric exercises before the 500-Query dev profile is
-unlocked. Frozen test stays closed until a milestone release gate.
+Integrate the stage diagnosis and candidate-ablation actions into the bounded
+Agent Runtime so a single Trace shows why a recall hypothesis was selected, why
+uniform/aggressive fusion was rejected, and why the conservative candidate was
+sent to Owner review. The Owner still needs to complete the Stage 1 data-boundary
+and Stage 2 metric learning evidence before the 500-Query dev profile is
+explicitly unlocked. Frozen test stays closed until a milestone release gate.

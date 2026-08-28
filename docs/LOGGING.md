@@ -27,6 +27,9 @@ stderr. Normal CLI results remain on stdout.
 | `agent_trace` | Trace artifact publication | `WARNING` |
 | `agent_replay` | Offline Trace validation and Replay lifecycle | `WARNING` |
 | `agent_optimization` | Strategy proposal, decision and catalog lifecycle | `WARNING` |
+| `retrieval` | Label-blind recall channels, fusion, stage retention and retrieval Runs | `WARNING` |
+| `stage_diagnosis` | Stage evidence validation and bottleneck diagnosis | `WARNING` |
+| `retrieval_analysis` | Bounded experiment orchestration and artifact publication | `WARNING` |
 
 The library default is `WARNING`. Verbose ranking events are opt-in because one
 event per Query becomes noisy on larger profiles.
@@ -43,6 +46,9 @@ export SEARCH_LOG_LEVEL_EVALUATION=INFO
 export SEARCH_LOG_LEVEL_RANKING=DEBUG
 export SEARCH_LOG_LEVEL_CATALOG=INFO
 export SEARCH_LOG_LEVEL_AGENT_RUNTIME=DEBUG
+export SEARCH_LOG_LEVEL_RETRIEVAL=DEBUG
+export SEARCH_LOG_LEVEL_RETRIEVAL_ANALYSIS=INFO
+export SEARCH_LOG_LEVEL_STAGE_DIAGNOSIS=INFO
 ```
 
 CLI entry points also accept repeatable module overrides. These examples keep
@@ -188,6 +194,26 @@ explicit unsupported proposal request is a debug-level
 contract failures—including unexpected `ValueError`—emit the privacy-safe
 ERROR event `agent_strategy_proposal_failed` and return a generic HTTP 503.
 
+The stage-aware retrieval slice uses three independently controlled modules.
+`retrieval` emits run/channel/fusion lifecycle events such as
+`retrieval_run_started`, `retrieval_query_completed`,
+`rrf_fusion_completed` and `retrieval_run_completed` with only profile,
+pipeline/channel IDs, counts, ranks and durations. `stage_diagnosis` emits
+`stage_diagnosis_started`, `stage_diagnosis_completed`,
+and `stage_diagnosis_failed`; `retrieval_analysis` emits
+`retrieval_analysis_artifacts_stored` after the bounded experiment set is
+durably published. These use only content-addressed evidence IDs,
+category/count summaries and stable outcomes. None logs raw Query text,
+product identifiers, titles, labels,
+ranked lists, filesystem paths or exception messages.
+
+The corresponding JSON under `retrieval-runs/`, `stage-diagnoses/` and
+`retrieval-comparisons/` is private evidence, not a sanitized log. It may
+contain Query-level rankings or labels needed for reproducibility. Keep the
+artifact root private and review exports. A stored analysis is evidence only:
+it does not create a proposal decision, strategy-catalog entry or active search
+configuration.
+
 ## Privacy and public errors
 
 The formatter normalizes case, punctuation and camelCase before recursively
@@ -262,6 +288,15 @@ systemd-analyze cat-config systemd/journald.conf
     `runs/strategy-decisions/` and `runs/search-strategies/`. In production,
     inspect the corresponding subdirectories below
     `/var/lib/search-engine-eva-agent/runtime/` as an authorized operator.
+12. `retrieval`: enable only `retrieval=DEBUG` while calling
+    `/agent/retrieval/analyze`; filter by `pipeline_run_id`, `pipeline_id` or
+    `channel_id`. Inspect the private Run only when stage rankings are required.
+13. `stage_diagnosis`: enable only `stage_diagnosis=INFO`; filter by
+    `diagnosis_id` or `pipeline_run_id` to isolate diagnosis from the per-Query
+    retrieval work.
+14. `retrieval_analysis`: enable only `retrieval_analysis=INFO`; filter by
+    `comparison_id`, `candidate_run_id` or `pipeline_run_id` to inspect bounded
+    experiment publication without enabling either retrieval or diagnosis logs.
 
 `tests/test_observability.py` and `tests/test_catalog_search.py` verify JSON structure, module isolation,
 redaction variants, error classification, stable events, low-noise defaults and
@@ -276,3 +311,7 @@ success/failure correlation, payload redaction, Trace validation and that
 offline Replay invokes neither Planner nor tools. Strategy optimization tests
 verify proposal/decision/catalog behavior and that proposal diagnostics do not
 log raw Query text.
+Retrieval and stage-diagnosis tests additionally verify independent module
+control, label-blind inputs, dev-before-read locking, privacy-safe success and
+failure events, immutable artifact storage and that analysis cannot activate a
+strategy.

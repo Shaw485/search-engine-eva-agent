@@ -52,12 +52,13 @@
 | D-019 | 最终 Agent 不能只是被动比较两个 Run；它必须主动搜索/抽样发现 Bad Case、提出候选优化、调用 Harness 比较，并通过审批面板让人点击更新或拒绝；批准后系统自动应用版本化策略并验证 | **Owner 主动提出并纠偏**：“你去判断或者构思或者自己去实际搜索，看看badcase，然后提出优化。然后用harness比较……人只需要点更新策略，或者拒绝策略” | Owner 定义目标产品行为；Codex 将其整理为 approval-gated optimization workflow 和阶段交付 | **Owner** 定义方向与审批交互；Codex 负责具体架构拆解和后续实现 | Codex 新增 `docs/AGENT_OPTIMIZATION_WORKFLOW.md`，更新 `ROADMAP.md`、`AGENT_FLOW.md`、README 与学习记录；该条记录的是当时的方向与规格，随后由 D-020/D-021 完成 smoke 后端与工作台的部分实现 | Owner-originated product decision + Codex specification implementation |
 | D-020 | Agent 工作台必须接真实后端：点开始后后台跑 smoke Harness、找 Bad Case、提出候选策略、返回指标与样本证据；Owner 点击更新/拒绝，批准后策略进入策略平台 | **Owner 主动提出并明确反对“只是预览”** | Owner 定义交互和审批边界；**Codex 设计并实现** API-first smoke-only proposal/decision/catalog 后端闭环与首个 exact-boost 候选策略 | **Owner** 决定产品体验必须闭环；Codex 选择 `candidate-title-bm25-exact-boost-v1` 作为首个受控候选策略并实现 | Codex 实现后端 proposal/decision/catalog、策略目录、前端工作台 API 接入、策略平台读取、模块化诊断与测试；当前审批只允许服务器 loopback Owner 通道，浏览器按钮和线上搜索生效尚未实现，也不解锁 dev/test | Owner-originated product requirement + Codex technical design/implementation |
 | D-021 | Agent 的分析、提案和对比必须升级为复杂但可控的优化策略，并允许后续用算法或模型增强；模型不得获得 Codex/平台私钥，必须由服务端 Owner 凭据或本地模型接入 | **Owner 主动提出**：“agent的分析，提案，对比。这应该是很复杂的策略”；并表示愿意提供模型额度方向 | Owner 定义“更强优化 Agent”目标；**Codex 设计**“诊断→有界候选→Harness→回归门禁→审批”架构、模型/密钥安全边界和首版工程默认门禁 | Owner 决定继续建设复杂优化 Agent；尚未独立选择模型、费用预算或正式门禁阈值。当前工程默认阈值不冒充 Owner 产品政策 | Codex 实现 smoke 根因诊断、参数化 exact-boost、多候选实验、透明相对选择分、七项可信门禁、Run/Comparison 重验、完整 active revision 与当前部署 revision 检查、候选完整 Ranker config 绑定、跨进程审批锁和工作台可视化；批准后下一轮以 active 策略为基线。未使用或提交任何 API Key | Owner-originated product direction + Codex technical design/implementation; model/provider policy pending Owner decision |
+| D-022 | 工作台按钮要能自主判断是否需要多路召回或粗排等阶段能力，自己运行候选实验和 Harness，再把证据交给 Owner 批准；首个实现使用 query-scoped 多路词法召回、RRF、粗排和 12 项门禁 | **Owner 主动要求**按钮达到“分析需要增加多路召回/增加粗排然后优化”的水平，并最终明确说“执行” | Owner 定义自动诊断/实验/人工批准的产品方向；**Codex 提出**固定 20-Query fully judged pool、title/exact/multi-field 通道、RRF Top 20、title-BM25 coarse Top 10、三个权重候选和 12 项工程门禁 | **Owner 批准执行该产品方向**；没有证据表明 Owner 独立选择了算法、权重、pool、cutoff 或阈值，这些仍是 Codex 方案 | Codex 实现 stage contracts、严格重验、三候选 ablation、stage diagnosis、Harness comparison、API/工作台证据与测试；conservative 候选本地 smoke 通过 12 门禁。当前只请求 Owner review，不写 decision/catalog/active，不改变线上搜索，也未声明部署 | Owner-originated capability decision + Codex-proposed/implemented technical slice |
 
 ### 尚未拍板的提案
 
 | ID | 提案 | 提案来源 | Owner 当前贡献 | 状态 |
 |---|---|---|---|---|
-| P-001 | 最终搜索实验室采用“多路召回 → 融合 → 粗排 → 精排 → 最终重排”，并把独立粗排层补入 Stage 6 | **Codex 提案** | Owner 主动追问项目是否覆盖成熟的多阶段搜索链路，属于 Review/学习贡献 | **Proposed**；后续“继续”不等于批准，尚不能写成 Owner-approved |
+| P-001 | 最终搜索实验室采用“多路召回 → 融合 → 粗排 → 精排 → 最终重排”，并把独立粗排层补入 Stage 6 | **Codex 提案** | Owner 先主动追问项目是否覆盖成熟多阶段链路，随后明确要求按钮能自主判断多路召回/粗排并说“执行” | **Partially adopted direction**：Owner 已批准执行 stage-aware 方向；当前只实现多路词法召回、RRF 与粗排 smoke slice，精排/最终重排仍未实现，具体架构仍属 Codex 方案 |
 
 ## 3. 当前里程碑贡献拆分
 
@@ -76,6 +77,9 @@
 - 要求把 Agent 的分析、提案和对比升级为更复杂的优化策略，并愿意在安全
   边界内引入算法或模型；这定义了能力方向，不等于 Owner 已选择具体模型、
   参数搜索算法、费用预算或发布门禁阈值。
+- 明确要求工作台按钮能自主判断是否需要多路召回、粗排等阶段能力，自动实验
+  和 Harness 比较后再由人批准，并以“执行”批准开始实现；Owner 没有据此
+  认领具体 RRF 权重或门禁阈值的原创。
 - 定义作品集入口和搜索体验页的关键交互、信息取舍，并通过实际页面反馈推动修正。
 - 定义软件必须具备模块化日志、独立排障、脱敏、生产降噪和保留说明等质量要求。
 - 保留关键政策的最终拍板权；目前明确批准了 `esci-primary-v1` 相关性政策。
@@ -97,6 +101,9 @@
 - 将固定单候选提案升级为确定性根因诊断、有界参数候选搜索、透明相对选择分、
   七项可信发布门禁、证据重验、active revision/CAS 和连续迭代基线，并设计
   模型 Provider 的密钥、预算与权限边界。
+- 设计并实现 query-scoped stage-aware retrieval：显式 title/exact/multi-field
+  召回通道、RRF、粗排、stage lineage、严格证据重验、三个候选 ablation 与
+  12 项门禁，并记录 conservative 通过、uniform/aggressive 失败的 smoke 证据。
 - 运行自动测试、数据校验和 smoke 实验，并把证据写入报告和 Git commits。
 - 讲解搜索原理、提示关键知识，并维护学习检查点和本归因台账。
 

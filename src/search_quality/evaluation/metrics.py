@@ -144,3 +144,47 @@ def mean_success_at_k(rankings: Iterable[Sequence[bool]], k: int) -> float:
     limit = _validate_k(k)
     values = [success_at_k(relevant, limit) for relevant in rankings]
     return _mean(values, metric_name="mean Success@K")
+
+
+def recall_at_k(
+    relevant: Sequence[bool],
+    *,
+    total_relevant: int,
+    k: int,
+) -> float:
+    """Return relevant hits in top-k divided by an explicit complete denominator.
+
+    The caller must obtain ``total_relevant`` from a fully judged evaluation
+    boundary. It is deliberately not inferred from the returned list.
+    """
+
+    limit = _validate_k(k)
+    if isinstance(total_relevant, bool) or not isinstance(total_relevant, Integral):
+        raise TypeError("total_relevant must be an integer")
+    if total_relevant < 1:
+        raise ValueError("Recall requires at least one judged relevant product")
+    validated = _validate_relevance(relevant)
+    relevant_hits = sum(validated[:limit])
+    if relevant_hits > total_relevant:
+        raise ValueError("returned relevant hits exceed the declared denominator")
+    return relevant_hits / int(total_relevant)
+
+
+def mean_recall_at_k(
+    rankings: Iterable[Sequence[bool]],
+    *,
+    total_relevant_by_query: Iterable[int],
+    k: int,
+) -> float:
+    """Return the macro-average of per-Query Recall@K."""
+
+    limit = _validate_k(k)
+    ranked_values = list(rankings)
+    denominators = list(total_relevant_by_query)
+    if len(ranked_values) != len(denominators):
+        raise ValueError("rankings and denominators must contain the same queries")
+    values = [
+        recall_at_k(relevant, total_relevant=total, k=limit)
+        for relevant, total in zip(ranked_values, denominators, strict=True)
+    ]
+    return _mean(values, metric_name="mean Recall")

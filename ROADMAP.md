@@ -4,7 +4,9 @@
 >
 > 更新日期：2026-08-28
 >
-> 当前状态：全量商品网站基线已部署；Runtime/Trace 脚手架与 smoke-only 多候选优化器两条切片已实现但尚未整合；Owner 体验与阶段 2 评测内核继续进行
+> 当前状态：全量商品网站基线已部署；Runtime/Trace 脚手架、exact-boost
+> 优化器与 query-scoped 阶段检索三条切片已实现但尚未整合；阶段检索新切片
+> 尚未部署；Owner 体验与阶段 2 评测内核继续进行
 >
 > 使用方式：一次只跨越一个验收门槛；Agent 的任何结论必须能够回到确定性实验结果。
 
@@ -116,9 +118,9 @@ Owner 决定先在现有 `shawspace.cn` 搜索体验页搜索全部 1,814,924 �
 | 3. 最小搜索评测 Agent | 首个计划—工具—观察—报告闭环 | 第一次可见的真实 Agent 行为 | **In Progress: deterministic scaffold only** |
 | 4. Agent Runtime Harness | 状态机、权限、预算、Trace、Replay | Agent 可控、可恢复、可复现 | **In Progress: local scaffold only** |
 | 5. Agent Evaluation Harness | 黄金任务集和 Agent 成绩单 | 证明 Agent 不是偶然成功 | **Not Started** |
-| 6. 搜索策略与诊断实验室 | Multi-field BM25、Vector、Hybrid、Rerank、Bad Case | Agent 获得更多可组合实验工具 | **Not Started** |
-| 7. 诊断与优化 Agent | 自动发现 Bad Case、提出策略、运行受控实验并请求审批 | 完整的搜索评测与优化 Agent | **In Progress: smoke diagnosis + bounded multi-candidate exact-boost search** |
-| 8. Web Agent 工作台与交付 | Agent 工作台、审批面板、搜索对比页、部署与作品集 | 用户可观察计划、工具、证据、Replay 和策略审批 | **In Progress: API-backed analysis/experiment/gate panel** |
+| 6. 搜索策略与诊断实验室 | Multi-field BM25、Vector、Hybrid、Rerank、Bad Case | Agent 获得更多可组合实验工具 | **In Progress: query-scoped multi-recall + RRF + coarse-rank slice** |
+| 7. 诊断与优化 Agent | 自动发现 Bad Case、提出策略、运行受控实验并请求审批 | 完整的搜索评测与优化 Agent | **In Progress: exact-boost optimizer + stage diagnosis/ablation; separate from Runtime** |
+| 8. Web Agent 工作台与交付 | Agent 工作台、审批面板、搜索对比页、部署与作品集 | 用户可观察计划、工具、证据、Replay 和策略审批 | **In Progress: stage-aware UI implemented locally, not deployed** |
 
 与 v0.1 相比，Agent MVP 从原阶段 5 前移到阶段 3；Trace、Replay 和 Agent Eval 也前移。向量与 Rerank 不再是 Agent 出现之前的前置条件。
 
@@ -312,6 +314,16 @@ Agent 指标：
 7. Query 分群：型号、品牌、属性、否定词、长短 Query。
 8. 将所有策略和诊断能力暴露为版本化工具。
 
+当前切片（2026-08-28）：已在固定 20-Query、416 judged pair 的封闭池中
+显式实现 title BM25、exact title 与 multi-field BM25 三路召回，RRF Top 20
+融合和 title-BM25 Top 10 粗排。Fine rank 与最终 rerank 仍明确标记为
+`not_implemented`。统一、保守和激进三个 RRF 候选均由 Harness 运行；只有
+`title=1.0 / exact=1.0 / multi-field=0.1` 的保守候选通过 12 项 smoke 门禁。
+这证明了阶段证据链与受控改道，不等于完整 Stage 6，也不解锁 dev/test。
+
+详细证据见 `docs/STAGE_AWARE_RETRIEVAL_REPORT.md`，架构决策见
+`docs/adr/004-stage-aware-retrieval-agent.md`。
+
 验收：
 
 - 四种策略使用同一数据和标签规则公平比较。
@@ -394,6 +406,10 @@ Agent 不可以：
 - 工作台展示根因、候选配置、三项核心指标、七项门禁和逐 Query 前后结果；
   浏览器仍无审批权，active 仍不影响 `/catalog/search`。
 - 关键知识随进度提供说明但不进行问答；500-Query dev 继续代码锁定。
+- 用 query-scoped 固定边界持续验证“多路召回 → RRF → 粗排 → 12 项门禁”；
+  uniform/aggressive 候选失败也必须保留为证据，不能只展示被选结果。
+- 当前阶段检索响应只能生成 Owner-reviewable 证据，不创建审批决定、不更新
+  strategy catalog、不改变 active config，也没有部署到线上工作台。
 
 ### Next
 
@@ -403,10 +419,13 @@ Agent 不可以：
   Planner 任务完成质量。
 - 实现有来源边界的 Query 构造器、分桶与更大已标注验证；不解锁 frozen test。
 - 实现认证 Owner 审批、CSRF、审计身份、验证后生效和可验证回滚。
+- 把 recall/fusion/coarse 的诊断、三个 RRF 候选实验和门禁结果接入 Runtime
+  工具与 Trace；让“uniform 失败 → conservative 通过”的改道可 Replay。
 
 ### Later
 
-- Multi-field BM25、纠错、Vector、Hybrid、Rerank 和业务重排等更多白名单策略。
+- 纠错、Vector、语义/词法 Hybrid、fine rank、Cross-Encoder rerank 和业务
+  重排等更多白名单策略；multi-field BM25/RRF 的 smoke 切片已先行实现。
 - 在 worker deadline、调用/Token/费用预算和严格 DSL 下接入可选模型 Planner；
   模型只提假设，不计算指标或批准发布。
 - Bad Case 黄金集、流量分桶、置信区间和线上灰度指标。
@@ -484,10 +503,11 @@ Agent 不可以：
 
 ## 10. 当前唯一下一步
 
-把已经实现的确定性优化器动作封装为 Runtime 工具和观察驱动 Planner：一次
-Agent Run 必须能在 Trace 中证明它为何选择 Bad Case、为何试某个候选、为何
-因门禁失败而改道或以 `requires_engineering` 停止。随后用固定 Agent 任务集
-评测这条完整链路。
+把已经实现的 exact-boost 优化器与 stage-aware retrieval 动作统一封装为
+Runtime 工具和观察驱动 Planner：一次 Agent Run 必须能在 Trace 中证明它
+为何判断问题发生在 recall/fusion/coarse，为什么尝试 uniform、conservative
+和 aggressive 候选，为什么因 12 项门禁失败而改道，以及为什么只生成
+Owner-reviewable 提案而不自行激活。随后用固定 Agent 任务集评测这条完整链路。
 
 该工作不依赖也不解锁 500-Query dev。更大验证、真实模型 Planner、浏览器
 审批和线上生效仍分别需要数据学习证据、安全机制与 Owner 明确决策；“继续”

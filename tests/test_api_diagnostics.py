@@ -56,6 +56,64 @@ def test_catalog_search_returns_full_catalog_contract(
     assert response == _FakeCatalogResult().to_dict()
 
 
+def test_retrieval_analysis_endpoint_returns_stage_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = {
+        "diagnosis_id": "stage-diagnosis-aaaaaaaaaaaa",
+        "retrieval_run_id": "retrieval-bbbbbbbbbbbb",
+        "status": "requires_engineering",
+    }
+
+    def analyze(**kwargs):
+        assert kwargs["project_root"] == api.PROJECT_ROOT
+        assert kwargs["profile_id"] == "smoke"
+        return expected
+
+    monkeypatch.setattr(api, "generate_retrieval_analysis", analyze)
+
+    assert api.agent_retrieval_analyze(api.RetrievalAnalysisRequest()) == expected
+
+
+def test_retrieval_analysis_route_has_a_strict_success_contract() -> None:
+    route = next(
+        item
+        for item in api.app.routes
+        if getattr(item, "path", None) == "/agent/retrieval/analyze"
+    )
+    assert route.response_model is api.RetrievalAnalysisResponse
+    assert api.RetrievalAnalysisResponse.model_config["extra"] == "forbid"
+
+
+def test_retrieval_analysis_failure_is_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream = io.StringIO()
+    configure_logging(
+        default_level="OFF",
+        module_levels={"api": "INFO"},
+        stream=stream,
+    )
+
+    def fail(**_kwargs):
+        raise ValueError("private query, product title and /private/path")
+
+    monkeypatch.setattr(api, "generate_retrieval_analysis", fail)
+    with logging_context(trace_id="retrieval-api-safe"):
+        with pytest.raises(HTTPException) as captured:
+            api.agent_retrieval_analyze(api.RetrievalAnalysisRequest())
+
+    assert captured.value.status_code == 503
+    assert captured.value.detail == {
+        "code": "retrieval_analysis_unavailable",
+        "message": "Retrieval analysis workflow unavailable",
+        "trace_id": "retrieval-api-safe",
+    }
+    assert "private query" not in stream.getvalue()
+    assert "product title" not in stream.getvalue()
+    assert "/private/path" not in stream.getvalue()
+
+
 def test_catalog_search_failure_is_safe_and_does_not_log_query(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

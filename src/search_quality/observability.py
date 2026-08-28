@@ -35,6 +35,9 @@ LOG_MODULES = frozenset(
         "data",
         "evaluation",
         "ranking",
+        "retrieval",
+        "retrieval_analysis",
+        "stage_diagnosis",
     }
 )
 OFF_LEVEL = logging.CRITICAL + 10

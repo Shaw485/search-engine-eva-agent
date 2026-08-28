@@ -68,7 +68,7 @@ logger = logging.getLogger("search_quality.evaluation")
 ranking_logger = logging.getLogger("search_quality.ranking")
 
 
-def _validate_frame(frame: pl.DataFrame) -> None:
+def validate_evaluation_frame(frame: pl.DataFrame) -> None:
     missing = sorted(REQUIRED_COLUMNS - set(frame.columns))
     if missing:
         raise ValueError(f"evaluation data is missing columns: {missing}")
@@ -254,7 +254,7 @@ def run_candidate_baseline(
         pl.col("eval_split").cast(pl.String).str.to_lowercase(),
         pl.col("origin_split").cast(pl.String).str.to_lowercase(),
     )
-    _validate_frame(frame)
+    validate_evaluation_frame(frame)
     data_sha256 = sha256_file(path)
     if data_sha256 != profile.file_sha256:
         raise ValueError(

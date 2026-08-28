@@ -19,6 +19,9 @@ Environment=SEARCH_LOG_LEVEL_API=INFO
 Environment=SEARCH_LOG_LEVEL_BACKEND=WARNING
 Environment=SEARCH_LOG_LEVEL_CATALOG=WARNING
 Environment=SEARCH_LOG_LEVEL_AGENT_OPTIMIZATION=INFO
+Environment=SEARCH_LOG_LEVEL_RETRIEVAL=INFO
+Environment=SEARCH_LOG_LEVEL_RETRIEVAL_ANALYSIS=INFO
+Environment=SEARCH_LOG_LEVEL_STAGE_DIAGNOSIS=INFO
 Environment=SEARCH_LOG_LEVEL_RANKING=OFF
 ExecStart=/var/www/search-engine-eva-agent/.venv/bin/python -m uvicorn apps.api.main:app --host 127.0.0.1 --port 8010 --no-access-log
 StandardOutput=journal

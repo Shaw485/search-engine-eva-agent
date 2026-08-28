@@ -14,7 +14,7 @@ from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import JSONResponse
 
 from search_quality.agent.optimization import (
@@ -24,6 +24,7 @@ from search_quality.agent.optimization import (
     generate_strategy_proposal,
     load_strategy_catalog,
 )
+from search_quality.agent.retrieval_analysis import generate_retrieval_analysis
 from search_quality.catalog import (
     DEFAULT_CATALOG_INDEX,
     CatalogSearchService,
@@ -193,6 +194,7 @@ async def request_diagnostics(request: Request, call_next):
                 "/agent/strategy/decision",
                 "/agent/strategy/catalog",
                 "/agent/strategy/propose",
+                "/agent/retrieval/analyze",
                 "/catalog/search",
                 "/health",
                 "/smoke",
@@ -287,6 +289,37 @@ class StrategyProposalRequest(BaseModel):
     """Start one approval-gated Agent strategy proposal run."""
 
     profile: Literal["smoke"] = "smoke"
+
+
+class RetrievalAnalysisRequest(BaseModel):
+    """Run the fixed smoke-only stage-aware retrieval analysis."""
+
+    profile: Literal["smoke"] = "smoke"
+
+
+class RetrievalAnalysisResponse(BaseModel):
+    """Strict top-level contract for the authenticated Agent workbench."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    aggregate: dict
+    candidate_aggregate: dict
+    candidate_diagnosis: dict
+    candidate_diagnosis_id: str = Field(pattern=r"^stage-diagnosis-[0-9a-f]{12}$")
+    candidate_run_id: str = Field(pattern=r"^retrieval-[0-9a-f]{12}$")
+    comparison: dict
+    comparison_id: str = Field(pattern=r"^retrieval-comparison-[0-9a-f]{12}$")
+    diagnosis: dict
+    diagnosis_id: str = Field(pattern=r"^stage-diagnosis-[0-9a-f]{12}$")
+    evaluation_boundary: dict
+    experiments: list[dict]
+    pipeline: dict
+    pipeline_id: str = Field(pattern=r"^pipeline-[0-9a-f]{12}$")
+    profile: Literal["smoke"]
+    proposal: dict
+    retrieval_run_id: str = Field(pattern=r"^retrieval-[0-9a-f]{12}$")
+    schema_version: Literal["retrieval-stage-analysis-response-v1"]
+    status: Literal["proposal_ready", "no_safe_improvement"]
 
 
 class StrategyDecisionRequest(BaseModel):
@@ -413,6 +446,36 @@ def agent_strategy_propose(request: StrategyProposalRequest) -> dict:
             detail={
                 "code": "strategy_proposal_unavailable",
                 "message": "Strategy proposal workflow unavailable",
+                "trace_id": trace_id,
+            },
+        ) from exc
+
+
+@app.post("/agent/retrieval/analyze", response_model=RetrievalAnalysisResponse)
+def agent_retrieval_analyze(request: RetrievalAnalysisRequest) -> dict:
+    """Diagnose recall, fusion and coarse-rank evidence before proposing changes."""
+
+    try:
+        return generate_retrieval_analysis(
+            project_root=PROJECT_ROOT,
+            artifact_root=_agent_artifact_root(),
+            profile_id=request.profile,
+            revision_provider=_api_code_revision,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        trace_id = current_trace_id()
+        logger.error(
+            "agent_retrieval_analysis_failed",
+            extra={
+                "error_code": classify_error(exc),
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "retrieval_analysis_unavailable",
+                "message": "Retrieval analysis workflow unavailable",
                 "trace_id": trace_id,
             },
         ) from exc

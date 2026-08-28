@@ -1315,9 +1315,9 @@ def _strategy_history_snapshot(
 
     strategy = proposal["strategy"]
     evidence = proposal.get("evidence")
-    aggregate_metrics = evidence.get("aggregate_metrics", {}) if isinstance(
-        evidence, dict
-    ) else {}
+    aggregate_metrics = (
+        evidence.get("aggregate_metrics", {}) if isinstance(evidence, dict) else {}
+    )
     release_gate = proposal.get("release_gate")
     return {
         **strategy["catalog_entry"],

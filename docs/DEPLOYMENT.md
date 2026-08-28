@@ -2,7 +2,9 @@
 
 This deployment serves the baseline search over all 1,814,924 official ESCI
 products. It does not claim Amazon production parity or full-catalog relevance
-quality; the optimized website lane remains closed.
+quality; the optimized website lane remains closed. The repository now also
+contains a stage-aware retrieval analysis route and its Nginx protection, but
+this document does not claim that new route or UI is currently deployed.
 
 ## Topology
 
@@ -79,10 +81,11 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-Only `/search-agent.html` and the proposal endpoint require this credential.
-The search experience, strategy page, catalog search and approved strategy
-catalog stay public. The exact decision location deliberately returns 404 even
-with credentials; human decisions are owner-only and must use the loopback API.
+Only `/search-agent.html`, the proposal endpoint and the stage-aware
+`/agent/retrieval/analyze` endpoint require this credential. The search
+experience, strategy page, catalog search and approved strategy catalog stay
+public. The exact decision location deliberately returns 404 even with
+credentials; human decisions are owner-only and must use the loopback API.
 
 ## Install or replace the index
 
@@ -136,6 +139,15 @@ curl --user shaw --request POST \
   'https://shawspace.cn/search-eval-api/agent/strategy/propose' \
   --header 'Content-Type: application/json' \
   --data '{"profile":"smoke"}'
+curl --output /dev/null --write-out '%{http_code}\n' \
+  --request POST \
+  'https://shawspace.cn/search-eval-api/agent/retrieval/analyze' \
+  --header 'Content-Type: application/json' \
+  --data '{"profile":"smoke"}'
+curl --user shaw --request POST \
+  'https://shawspace.cn/search-eval-api/agent/retrieval/analyze' \
+  --header 'Content-Type: application/json' \
+  --data '{"profile":"smoke"}'
 curl 'https://shawspace.cn/search-eval-api/agent/strategy/catalog'
 curl --output /dev/null --write-out '%{http_code}\n' \
   --request POST 'https://shawspace.cn/search-eval-api/agent/strategy/decision' \
@@ -150,10 +162,13 @@ Acceptance requires:
 
 1. Health reports `catalog.status=ready`, the expected index ID and 1,814,924 products.
 2. English, Spanish, Japanese and exact product-ID checks return valid JSON.
-3. Anonymous requests to the Agent page and proposal endpoint return `401`;
-   authenticated proposal requests return a pending proposal with baseline Run
-   ID, candidate Run ID, comparison ID, aggregate metric deltas and bad-case
-   examples. Search and strategy pages remain anonymously accessible.
+3. Anonymous requests to the Agent page, proposal endpoint and stage-aware
+   retrieval endpoint return `401`; authenticated proposal requests return a
+   pending proposal with baseline Run ID, candidate Run ID, comparison ID,
+   aggregate metric deltas and bad-case examples. An authenticated retrieval
+   analysis returns all three bounded candidate outcomes, stage metrics, 12 gate
+   checks and representative product evidence. Search and strategy pages remain
+   anonymously accessible.
 4. The strategy catalog endpoint returns the current approved runtime strategy
    list. It can be empty before the Owner approves a proposal.
 5. The public decision check returns `404`; only a deliberate loopback request
@@ -164,8 +179,16 @@ Acceptance requires:
 8. The optimized lane is still visibly unsupported.
 9. A failed Query can be correlated by `X-Request-ID` without Query text in logs.
 
-Proposal, comparison and decision JSON under the runtime directory are evidence
-artifacts rather than logs. They can contain Query and product examples. Keep
+For stage-aware retrieval, a successful authenticated response means only that
+the local smoke analysis completed. It must report `proposal_ready` or a bounded
+terminal status without creating a strategy decision, catalog entry or active
+configuration. Verify `/catalog/search` is unchanged. Deployment of this new
+route/UI requires an explicit release action and must not be inferred from a
+local test or this reference configuration.
+
+Proposal, retrieval Run/diagnosis/comparison and decision JSON under the
+runtime directory are evidence artifacts rather than logs. They can contain
+Query and product examples. Keep
 the directory private (`0750`), monitor its size, back it up only when evidence
 must be retained, and review artifacts before export. Do not delete a proposal
 that has an associated human decision.

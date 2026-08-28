@@ -1,0 +1,26 @@
+{
+  "eligible_metrics": [
+    "judged_recall@5",
+    "judged_recall@10",
+    "mrr@10",
+    "ndcg@10"
+  ],
+  "forbidden_claims": [
+    "amazon_full_catalog_recall",
+    "production_search_quality",
+    "unjudged_products_are_irrelevant",
+    "smoke_results_generalize"
+  ],
+  "judged_pairs": 416,
+  "policy_file_sha256": "cd5d17dcf90ed41e6ddb19f9e708015cb886322d764b82df32dfb74b4829f13e",
+  "pool_construction": "per_query_fully_judged_candidate_pool",
+  "possible_pairs_in_scope": 416,
+  "profile": "smoke",
+  "query_count": 20,
+  "query_keys_sha256": "934f09cacfcc84b8ba20b5b681089f7fc9da7b7487f7082e5783648ef03d3adb",
+  "schema_version": "query-scoped-retrieval-profile-v0",
+  "source_file_sha256": "b0512f03c0a11ff443f3dab4336c9780e75d8f0b18f1cc30c047ef777603a9a7",
+  "stage1_manifest_sha256": "5da414720f95cc19a4488643785142221b609ea81d7ac607b751ab843aafb03c",
+  "unknown_pairs_in_scope": 0,
+  "unjudged_treatment": "exclude_out_of_scope"
+}

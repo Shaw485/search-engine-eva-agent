@@ -106,6 +106,44 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
   模型预算，因此不能把这些工程默认值写成 Owner 原创政策。
 - 状态：**Explanation delivered; independent verification pending**
 
+## 当前插入知识：Recall 提升不等于最终排序提升
+
+【必学知识提醒】
+
+- 当前知识：多路召回、融合和粗排是三个独立阶段。Recall union 回答“至少
+  一条路有没有找到”，RRF 回答“合并后是否保留”，粗排回答“Top 10 是否
+  仍把相关商品排在合适位置”。
+- 为什么现在必须理解：否则会把“multi-field 找到了更多相关商品”直接说成
+  “用户结果变好了”。新通道也可能把噪声带入 RRF，挤掉原有高质量结果。
+- 最低掌握范围：能区分 recall miss、fusion drop 和 coarse-rank drop；能说明
+  为什么每增加一条召回路都必须继续检查下游 nDCG/MRR 和 Query 退化。
+- 具体例子：本次 conservative 候选把 recall-union coverage 从
+  `0.8114716964` 提到 `0.8487412085`，但 coarse Recall@10 仍是
+  `0.5296930653`。这表示新增相关商品进入过召回集合，却不保证都进入最终
+  Top 10。uniform 候选具有同样的 union coverage，却因下游退化失败七项门禁。
+- 验证证据：`docs/STAGE_AWARE_RETRIEVAL_REPORT.md`；当前只是说明已提供，
+  不能记作 Owner 已独立掌握。
+- 状态：**Explanation delivered; independent verification pending**
+
+## 当前插入知识：宏平均与微观商品贡献回答不同问题
+
+【必学知识提醒】
+
+- 当前知识：mean Query metric 先对每个 Query 算分再平均，让每个 Query 权重
+  相同；unique relevant contribution 是 Query-product 层面的微观计数，商品
+  多的 Query 可能贡献更多项。
+- 为什么现在必须理解：Agent 面板同时展示“平均覆盖率”和“新通道独有相关
+  商品”时，两者不能混成同一百分比。一个策略可能多找回许多商品，但只集中
+  在少量 Query；也可能每个 Query 小幅改善而微观计数不大。
+- 最低掌握范围：能说明宏平均适合看 Query 体验是否广泛改善，微观贡献适合
+  证明新通道是否真的提供增量；发布判断必须同时下钻 Query 分布。
+- 具体例子：本次 `+3.73` percentage points 是 20 个 Query 的 mean judged
+  recall-union coverage 变化；新通道独有相关项则是逐 Query-product 的计数。
+  两者的分母不同，不能写成同一个“提升率”。
+- 验证证据：stage-aware comparison 记录两类统计及逐 Query Diff；学习验证
+  仍待 Owner 日后用自己的话复述。
+- 状态：**Explanation delivered; independent verification pending**
+
 ## 检查点记录
 
 完成一个检查点后，在这里追加简短记录：
