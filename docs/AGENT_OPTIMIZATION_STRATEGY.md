@@ -181,9 +181,12 @@ normal code-review and deployment path.
 
 The implemented smoke slice reloads the stored Runs, rebuilds the Comparison,
 recomputes the selected evaluation with the trusted gate policy, compares a
-SHA-256 revision of the complete active entry, and serializes decisions with a
-cross-process file lock before updating the versioned strategy catalog. The
-next optimization round consumes that active config as its baseline.
+SHA-256 revision of the complete active entry, and requires the baseline Run,
+candidate Run and comparator to match the currently deployed Git revision. It
+also checks the candidate's complete canonical Ranker config rather than only
+its three boost values. Decisions are serialized with a cross-process file lock
+before updating the versioned strategy catalog. The next optimization round
+consumes that active config as its baseline.
 
 This is not yet the complete target lifecycle: there is no larger-set
 post-approval validation or automatic rollback, and the full-catalog
@@ -217,6 +220,12 @@ Provider output is a strict strategy DSL containing only allowlisted family,
 bounded parameters, target buckets, hypothesis and evidence references. The
 deterministic fallback remains available when the provider is missing, times
 out, exceeds budget or returns invalid output.
+
+Before any model provider is connected, the trusted service must reconstruct
+the diagnosis-derived candidate selection, rerun every candidate evaluation and
+recompute `select_winner()` from Harness evidence. The current deterministic
+generator is inside the trusted service and approval revalidates the selected
+winner; that narrower boundary must not be reused for untrusted model output.
 
 ## Tool inventory
 
