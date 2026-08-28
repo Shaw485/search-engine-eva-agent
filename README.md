@@ -10,8 +10,8 @@ and shows a panel where a human accepts or rejects the strategy update.
 
 ## Project status
 
-**Full-catalog baseline, Stage 2 Harness, and a deterministic stage-aware Agent
-Runtime vertical slice: in progress.** The Owner
+**Full-catalog baseline, Stage 2 Harness, a deterministic stage-aware Agent
+Runtime vertical slice, and the first fixed Agent Eval suite: in progress.** The Owner
 has prioritized an experience milestone: all 1,814,924 official ESCI products
 must first be searchable on the existing portfolio page, while the optimized
 lane remains closed. This product-search track uses a persistent SQLite FTS5
@@ -33,6 +33,18 @@ on observations, enforces budgets and stores an offline-replayable Trace. The
 original trusted-Run comparison task and the stage-aware retrieval task now use
 the same Runtime/Trace/Replay boundary. The exact-boost optimizer remains a
 separate controller and is not represented as a Runtime Trace yet.
+
+Stage 5 now has a fixed 12-task Agent Evaluation Harness with an independent
+static Oracle. It exercises observation-driven branching, one-retry recovery,
+safe failure, unauthorized-tool containment, step budgets, clean Replay and
+tamper rejection. Results are attributed separately to eight production-Planner
+tasks and four finite Harness-stimulus containment tasks; a combined 12/12 is
+not presented as twelve production-Planner decisions. This evaluates Agent
+behavior, not search relevance. A separate source-bounded Query constructor
+requires a clean revision and independently pins the committed 20-Query smoke
+view before producing 59 development cases (20 originals and 39 unjudged
+synthetic cases). It cannot read the locked 500-Query dev or frozen test
+profiles, and its mixed output is ineligible for formal nDCG/MRR evaluation.
 
 A local-only stage-aware Agent task now makes recall, RRF fusion and coarse
 ranking explicit. On the fixed 20-Query fully judged pool it diagnoses the
@@ -78,6 +90,8 @@ explicit pending integration check, not an implicit fallback or a claimed pass.
 - Stage-aware retrieval decision: [docs/adr/004-stage-aware-retrieval-agent.md](docs/adr/004-stage-aware-retrieval-agent.md)
 - Stage-aware Runtime/Trace decision: [docs/adr/005-stage-retrieval-runtime-trace.md](docs/adr/005-stage-retrieval-runtime-trace.md)
 - Stage-aware retrieval smoke evidence: [docs/STAGE_AWARE_RETRIEVAL_REPORT.md](docs/STAGE_AWARE_RETRIEVAL_REPORT.md)
+- Agent Evaluation Harness evidence: [docs/AGENT_EVALUATION_REPORT.md](docs/AGENT_EVALUATION_REPORT.md)
+- Source-bounded Query constructor: [docs/QUERY_CONSTRUCTOR.md](docs/QUERY_CONSTRUCTOR.md)
 - Required learning: [docs/LEARNING_CHECKPOINTS.md](docs/LEARNING_CHECKPOINTS.md)
 - Decision and contribution provenance: [docs/CONTRIBUTION_LOG.md](docs/CONTRIBUTION_LOG.md)
 - Logging and independent diagnostics: [docs/LOGGING.md](docs/LOGGING.md)
@@ -107,6 +121,8 @@ make smoke
 make eval-baseline
 make compare-runs
 BASELINE_RUN_ID=... CANDIDATE_RUN_ID=... make agent-smoke
+make agent-eval
+make query-set-smoke
 make catalog-index
 EVAL_RANKER=title-bm25 make eval-baseline
 QUERY="iphone 15 pro case" make smoke
@@ -123,6 +139,12 @@ deterministic observation-driven Runtime, and stores a Trace under ignored
 `runs/agent-traces/`. See [docs/AGENT_RUNTIME.md](docs/AGENT_RUNTIME.md) for
 Replay, logging filters and the explicit limitations before a real model is
 connected.
+
+`make agent-eval` runs all 12 fixed Agent-behavior tasks and writes deterministic
+evidence plus a separate execution receipt under ignored `runs/agent-evals/`.
+`make query-set-smoke` creates an immutable exploratory Query set under
+`runs/query-sets/`. Neither command approves a proposal, changes an active
+strategy, deploys code or unlocks larger evaluation profiles.
 
 The Stage 2 CLI trusts the local operator and only loads artifacts directly from
 the project's ignored `runs/` store. Run and comparison IDs are content hashes:
@@ -165,6 +187,14 @@ curl 'http://127.0.0.1:8000/agent/strategy/catalog'
 curl --request POST 'http://127.0.0.1:8000/agent/retrieval/analyze' \
   --header 'Content-Type: application/json' \
   --data '{"profile":"smoke"}'
+
+curl --request POST 'http://127.0.0.1:8000/agent/eval/run' \
+  --header 'Content-Type: application/json' \
+  --data '{"suite":"stage5-retrieval-v1"}'
+
+curl --request POST 'http://127.0.0.1:8000/agent/query-constructor/build' \
+  --header 'Content-Type: application/json' \
+  --data '{"source":"smoke"}'
 ```
 
 `/agent/retrieval/analyze` creates a bounded Runtime task, executes two
@@ -175,6 +205,10 @@ privacy-safe action timeline. It is an analysis route, not an activation route.
 In the Nginx reference configuration it shares the authenticated
 Agent-workbench boundary and has request access logging disabled because its
 response contains Query and product evidence.
+
+The Agent Eval and Query-constructor routes are also exact, authenticated Nginx
+locations. Their browser responses contain only aggregate counts and evidence
+IDs; detailed traces and raw Query cases remain private server-side artifacts.
 
 ## What the Stage 0 vector result means
 
@@ -283,11 +317,9 @@ not presented as full-catalog recall.
 
 ## Next step
 
-Build the first fixed Agent Evaluation Harness set (at least 10 tasks) around
-the completed stage-aware Trace path. It must score task success, tool choice,
-grounding, bounded recovery and Replay fidelity, and include altered-gate,
-reordered-action and tool-failure cases. In parallel, define the source-bounded
-Query constructor that will later feed larger labeled validation without
-unlocking frozen test. The Owner still needs to complete the Stage 1
+Run the constructed smoke cases through the baseline and classify zero-result,
+spelling-sensitive, token-order and stage-drop Bad Cases. Add a small
+human-reviewed diagnosis Oracle and force-terminating worker deadline before a
+model Planner is connected. The Owner still needs to complete the Stage 1
 data-boundary and Stage 2 metric learning evidence before the 500-Query dev
-profile is explicitly unlocked.
+profile is explicitly unlocked; frozen test remains unavailable to tuning.

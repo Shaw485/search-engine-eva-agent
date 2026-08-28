@@ -81,8 +81,9 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-Only `/search-agent.html`, the proposal endpoint and the stage-aware
-`/agent/retrieval/analyze` endpoint require this credential. The search
+Only `/search-agent.html`, the proposal endpoint, the stage-aware
+`/agent/retrieval/analyze` endpoint, Agent Eval and the Query constructor
+require this credential. The search
 experience, strategy page, catalog search and approved strategy catalog stay
 public. The exact decision location deliberately returns 404 even with
 credentials; human decisions are owner-only and must use the loopback API.
@@ -91,6 +92,13 @@ Runtime policy allows at most 120 seconds. This is a synchronous smoke-only
 bridge; before larger data or concurrent use, replace it with a queued worker,
 pollable task status and force-terminable job deadline rather than extending the
 HTTP timeout again.
+Agent Eval uses the same 130-second proxy timeout for its fixed 12-task Suite;
+the Query constructor uses 15 seconds. Both exact routes clear the Nginx Basic
+Auth header before proxying and disable request access logs.
+The Agent Eval runner refuses new work after its private artifact tree exceeds
+2 GiB. Monitor `/var/lib/search-engine-eva-agent/runtime/agent-evals/`; archive
+old execution receipts and Traces according to the host retention policy while
+retaining any deterministic evidence cited by a decision or incident.
 
 ## Install or replace the index
 
@@ -153,6 +161,23 @@ curl --user shaw --request POST \
   'https://shawspace.cn/search-eval-api/agent/retrieval/analyze' \
   --header 'Content-Type: application/json' \
   --data '{"profile":"smoke"}'
+curl --output /dev/null --write-out '%{http_code}\n' \
+  --request POST 'https://shawspace.cn/search-eval-api/agent/eval/run' \
+  --header 'Content-Type: application/json' \
+  --data '{"suite":"stage5-retrieval-v1"}'
+curl --user shaw --request POST \
+  'https://shawspace.cn/search-eval-api/agent/eval/run' \
+  --header 'Content-Type: application/json' \
+  --data '{"suite":"stage5-retrieval-v1"}'
+curl --output /dev/null --write-out '%{http_code}\n' \
+  --request POST \
+  'https://shawspace.cn/search-eval-api/agent/query-constructor/build' \
+  --header 'Content-Type: application/json' \
+  --data '{"source":"smoke"}'
+curl --user shaw --request POST \
+  'https://shawspace.cn/search-eval-api/agent/query-constructor/build' \
+  --header 'Content-Type: application/json' \
+  --data '{"source":"smoke"}'
 curl 'https://shawspace.cn/search-eval-api/agent/strategy/catalog'
 curl --output /dev/null --write-out '%{http_code}\n' \
   --request POST 'https://shawspace.cn/search-eval-api/agent/strategy/decision' \

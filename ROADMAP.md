@@ -2,11 +2,12 @@
 
 > 文档版本：v0.2
 >
-> 更新日期：2026-08-28
+> 更新日期：2026-08-29
 >
 > 当前状态：全量商品网站基线已部署；query-scoped 阶段检索已接入
 > Runtime/Trace/Replay 并完成本地网页时间线；exact-boost 仍是独立控制器，
-> 阶段检索新切片尚未部署；Owner 体验与阶段 2 评测内核继续进行
+> Stage 5 第一版 12 任务 Agent Eval 与 smoke-only Query 构造器已完成本地
+> 实现，新增工作台入口尚未部署；Owner 体验与阶段 2 评测内核继续进行
 >
 > 使用方式：一次只跨越一个验收门槛；Agent 的任何结论必须能够回到确定性实验结果。
 
@@ -117,7 +118,7 @@ Owner 决定先在现有 `shawspace.cn` 搜索体验页搜索全部 1,814,924 �
 | 2. Search Evaluation Harness | 指标、BM25 基线、Run 与对比报告 | Agent 可依赖的确定性工具层 | **In Progress** |
 | 3. 最小搜索评测 Agent | 首个计划—工具—观察—报告闭环 | 第一次可见的真实 Agent 行为 | **In Progress: stage-aware deterministic path integrated** |
 | 4. Agent Runtime Harness | 状态机、权限、预算、Trace、Replay | Agent 可控、可恢复、可复现 | **In Progress: local retrieval Trace/Replay integrated** |
-| 5. Agent Evaluation Harness | 黄金任务集和 Agent 成绩单 | 证明 Agent 不是偶然成功 | **Not Started** |
+| 5. Agent Evaluation Harness | 黄金任务集和 Agent 成绩单 | 证明 Agent 不是偶然成功 | **In Progress: fixed 12-task v1 passes locally** |
 | 6. 搜索策略与诊断实验室 | Multi-field BM25、Vector、Hybrid、Rerank、Bad Case | Agent 获得更多可组合实验工具 | **In Progress: query-scoped multi-recall + RRF + coarse-rank slice** |
 | 7. 诊断与优化 Agent | 自动发现 Bad Case、提出策略、运行受控实验并请求审批 | 完整的搜索评测与优化 Agent | **In Progress: stage-aware Runtime path + separate exact-boost controller** |
 | 8. Web Agent 工作台与交付 | Agent 工作台、审批面板、搜索对比页、部署与作品集 | 用户可观察计划、工具、证据、Replay 和策略审批 | **In Progress: read-only Runtime Trace UI implemented locally, not deployed** |
@@ -304,6 +305,21 @@ Agent 指标：
 - 与固定脚本工作流比较，说明 Agent 的收益和额外成本。
 - 零越权工具调用，零 frozen-test 调参。
 
+当前切片（2026-08-29）：已经实现 `stage5-retrieval-v1` 固定 Suite 与静态
+Oracle，一条命令运行 12 个任务。任务覆盖三个正常分支、三种故障恢复语义、
+跳步、越权工具、无证据结束、步数预算、Trace 篡改和 locked-profile 诱导。
+当前实现测试为 12/12：8 项归因于生产 Planner，4 项明确归因于 Harness
+stimulus 对 Runtime 的围栏测试；不能把后四项冒充生产 Planner 的决策能力。
+Task Success、独立 evidence-ref Grounding、工具选择、恢复、预算、Replay 与
+篡改拒绝均为 1.0，受保护 profile dispatch、策略权威写入和越权副作用均为 0。
+固定工作流只在 3 个对称 branching 情境比较，双方成功率均为 1.0；它只支持
+有界工具成本比较，不证明 Agent 在真实任务上“比脚本好一倍”。
+
+同时完成了来源受限的 Query 构造器：只读取 committed smoke 的 Query 与来源
+字段，从 20 个原始 Query 生成 39 个相邻字母调换/词序反转样本，合计 59 个
+全局去重案例。合成样本没有继承 ESCI 标签，只能用于 Bad Case 探索，不能
+进入正式 nDCG/MRR；dev/test 在任何数据读取前即被拒绝。
+
 ### 阶段 6：搜索策略与 Bad Case 实验室
 
 目标：把更强的搜索能力作为 Agent 可组合的实验工具，而不是孤立 Demo。
@@ -419,10 +435,10 @@ Agent 不可以：
 
 ### Next
 
-- 建立至少 10 个固定 Agent 任务和 Agent Eval 判定，区分 Runtime 正确与
-  Planner 任务完成质量；覆盖成功、无安全提升、工具重试、篡改、跳步和
-  越权诱导。
-- 实现有来源边界的 Query 构造器、分桶与更大已标注验证；不解锁 frozen test。
+- 让 Agent 实际执行 Query 构造器产物，归类零结果、拼写敏感、词序敏感和
+  stage-drop Bad Case，并建立一小组人工复核的诊断 Oracle。
+- 补强制 worker deadline 和跨进程运行锁；保持 500-Query dev/frozen test
+  门禁不变。
 - 实现认证 Owner 审批、CSRF、审计身份、验证后生效和可验证回滚。
 - 将仍独立的 exact-boost 控制器迁入统一 Runtime 工具与 Trace 契约。
 
@@ -507,11 +523,12 @@ Agent 不可以：
 
 ## 10. 当前唯一下一步
 
-为已经打通的 stage-aware Runtime 链路建立第一版 Agent Evaluation Harness：
-至少 10 个固定任务，分别验证工具选择、观察后改道、终态正确、证据引用、
-预算遵守、一次故障恢复和 Replay 忠实度，并与固定工作流的成功率/成本对照。
-同时只设计 Query 构造器的来源、分桶、去重和污染边界，不提前读取 dev/test。
+把第一版 Agent Eval 从“固定契约情境”推进到“可验证的 Bad Case 发现任务”：
+Query 构造器提供来源与分桶，Agent 在 smoke 范围内实际搜索这些探索 Query，
+识别零结果、拼写敏感、词序敏感和阶段丢失案例，再输出可由独立 Oracle 检查的
+诊断与候选实验计划。先补 worker 强制 deadline、任务级失败分类和人工复核过的
+黄金案例，不接真实模型、不批准策略，也不修改 `/catalog/search`。
 
-该工作不依赖也不解锁 500-Query dev。更大验证、真实模型 Planner、浏览器
-审批和线上生效仍分别需要数据学习证据、安全机制与 Owner 明确决策；“继续”
-不会自动跨越这些门禁。
+该工作仍不解锁 500-Query dev 或 frozen test。更大验证、模型 Planner、浏览器
+审批、全量 serving pipeline 和线上生效分别需要学习证据、安全机制与 Owner
+明确决策；“继续”不会自动跨越这些门禁。

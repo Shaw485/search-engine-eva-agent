@@ -15,7 +15,7 @@ from .contracts import (
     ToolAction,
     ToolObservation,
 )
-from .errors import AgentPolicyError
+from .errors import AgentPolicyError, AgentReplayError
 from .grounding import validate_action_scope, validate_finish_grounding
 from .reporting import build_terminal_report
 from .trace import (
@@ -73,15 +73,20 @@ class TraceReplayer:
                 terminal_event = None
                 pending_tool_name: str | None = None
                 pending_scope_error: str | None = None
+                pending_registry_error: str | None = None
                 action_count = 0
                 for expected_sequence, event in enumerate(trace.events, start=1):
                     if event.sequence != expected_sequence:
                         raise ValueError("Trace sequence is not contiguous")
                     if event.previous_hash != previous_hash:
-                        raise ValueError("Trace hash chain is broken")
+                        raise AgentReplayError(
+                            "trace_hash_mismatch", "Trace hash chain is broken"
+                        )
                     payload = event.model_dump(mode="json", exclude={"event_hash"})
                     if compute_event_hash(payload) != event.event_hash:
-                        raise ValueError("Trace event hash does not match")
+                        raise AgentReplayError(
+                            "trace_hash_mismatch", "Trace event hash does not match"
+                        )
                     if event.state_before != state:
                         raise ValueError("Trace state continuity is broken")
                     transition = (
@@ -117,6 +122,8 @@ class TraceReplayer:
                             raise ValueError("Trace action has no observation")
                         action = ToolAction.model_validate(event.decision)
                         pending_tool_name = action.tool_name
+                        if action.tool_name not in trace.tool_names:
+                            pending_registry_error = "tool_not_allowed"
                         try:
                             validate_action_scope(
                                 trace.task,
@@ -137,9 +144,12 @@ class TraceReplayer:
                             raise ValueError(
                                 "Trace observation does not match its action"
                             )
-                        if pending_scope_error is not None and (
+                        expected_policy_error = (
+                            pending_scope_error or pending_registry_error
+                        )
+                        if expected_policy_error is not None and (
                             observation.status != "failed"
-                            or observation.error_code != pending_scope_error
+                            or observation.error_code != expected_policy_error
                         ):
                             raise ValueError(
                                 "Trace task-scope violation was not enforced"
@@ -148,10 +158,14 @@ class TraceReplayer:
                             hashlib.sha256(observation.canonical_payload()).hexdigest()
                             != observation.sha256
                         ):
-                            raise ValueError("Trace observation hash does not match")
+                            raise AgentReplayError(
+                                "trace_hash_mismatch",
+                                "Trace observation hash does not match",
+                            )
                         observations.append(observation)
                         pending_tool_name = None
                         pending_scope_error = None
+                        pending_registry_error = None
                     if event.event_type == "run_completed":
                         if not event.decision or event.decision.get("kind") != "finish":
                             raise ValueError("Trace completion event is malformed")
@@ -289,10 +303,15 @@ class TraceReplayer:
                 )
                 if expected_report != trace.terminal.report:
                     raise ValueError("Trace terminal report does not replay")
-            except Exception:
+            except Exception as exc:
+                error_code = (
+                    exc.code
+                    if isinstance(exc, AgentReplayError)
+                    else "trace_replay_failed"
+                )
                 logger.error(
                     "agent_replay_failed",
-                    extra={"error_code": "trace_replay_failed"},
+                    extra={"error_code": error_code},
                 )
                 raise
             logger.info(

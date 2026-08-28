@@ -8,6 +8,7 @@ import re
 import sqlite3
 import threading
 import time
+from collections import Counter
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Self
@@ -25,6 +26,7 @@ from search_quality.agent.optimization import (
     load_strategy_catalog,
 )
 from search_quality.agent.retrieval_runtime import generate_retrieval_runtime_analysis
+from search_quality.agent_eval.runner import run_agent_eval_suite
 from search_quality.catalog import (
     DEFAULT_CATALOG_INDEX,
     CatalogSearchService,
@@ -38,6 +40,7 @@ from search_quality.observability import (
     logging_context,
     new_trace_id,
 )
+from search_quality.query_constructor import build_smoke_query_set, store_query_set
 from search_quality.smoke import run_smoke
 
 configure_logging()
@@ -45,6 +48,7 @@ logger = logging.getLogger("search_quality.api")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CODE_REVISION_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
 _AGENT_PROPOSAL_LOCK = threading.Lock()
+_AGENT_EVAL_LOCK = threading.Lock()
 _AGENT_PROPOSAL_CACHE: dict[tuple[str, str, str, str], dict] = {}
 
 app = FastAPI(
@@ -195,6 +199,8 @@ async def request_diagnostics(request: Request, call_next):
                 "/agent/strategy/catalog",
                 "/agent/strategy/propose",
                 "/agent/retrieval/analyze",
+                "/agent/eval/run",
+                "/agent/query-constructor/build",
                 "/catalog/search",
                 "/health",
                 "/smoke",
@@ -297,6 +303,168 @@ class RetrievalAnalysisRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     profile: Literal["smoke"] = "smoke"
+
+
+class AgentEvalRequest(BaseModel):
+    """Run the fixed Stage 5 Agent Eval suite; arbitrary suites are forbidden."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    suite: Literal["stage5-retrieval-v1"] = "stage5-retrieval-v1"
+
+
+class AgentEvalMetricsResponse(BaseModel):
+    """Privacy-safe aggregate Agent behavior metrics."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    task_success_rate: float = Field(ge=0.0, le=1.0)
+    grounded_claim_rate: float = Field(ge=0.0, le=1.0)
+    tool_selection_accuracy: float = Field(ge=0.0, le=1.0)
+    recovery_rate: float = Field(ge=0.0, le=1.0)
+    budget_compliance_rate: float = Field(ge=0.0, le=1.0)
+    replay_fidelity_rate: float = Field(ge=0.0, le=1.0)
+    tamper_rejection_rate: float = Field(ge=0.0, le=1.0)
+    unauthorized_effect_count: int = Field(ge=0)
+    protected_profile_read_count: int = Field(ge=0)
+    strategy_write_count: int = Field(ge=0)
+    total_agent_steps: int = Field(ge=0)
+    total_agent_tool_calls: int = Field(ge=0)
+    comparable_workflow_success_rate: float = Field(ge=0.0, le=1.0)
+    comparable_workflow_tool_calls: int = Field(ge=0)
+
+
+class AgentEvalSubjectResponse(BaseModel):
+    """Aggregate attribution without exposing task payloads or Trace details."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    subject_kind: Literal["production_planner", "harness_stimulus"]
+    task_count: int = Field(ge=1, le=12)
+    passed_count: int = Field(ge=0, le=12)
+
+    @model_validator(mode="after")
+    def validate_counts(self) -> Self:
+        if self.passed_count > self.task_count:
+            raise ValueError("subject pass count exceeds its task count")
+        return self
+
+
+class AgentEvalResponse(BaseModel):
+    """Small response for the workbench; detailed traces stay server-side."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal["agent-eval-api-summary-v1"]
+    suite_id: Literal["stage5-retrieval-v1"]
+    evidence_id: str = Field(pattern=r"^agent-eval-[0-9a-f]{12}$")
+    execution_id: str = Field(pattern=r"^agent-eval-execution-[0-9a-f]{32}$")
+    formal_passed: bool
+    task_count: int = Field(ge=12, le=12)
+    metrics: AgentEvalMetricsResponse
+    subject_summaries: tuple[AgentEvalSubjectResponse, AgentEvalSubjectResponse]
+    limitations: tuple[
+        Literal["scripted_failures_do_not_prove_worker_deadline_enforcement"],
+        Literal["contract_fixtures_test_runtime_behavior_not_search_quality"],
+        Literal["grounded_claim_rate_v1_is_terminal_grounding_proxy"],
+    ]
+
+    @model_validator(mode="after")
+    def validate_attribution(self) -> Self:
+        if tuple(item.subject_kind for item in self.subject_summaries) != (
+            "production_planner",
+            "harness_stimulus",
+        ):
+            raise ValueError("Agent Eval subject summaries are missing or reordered")
+        if tuple(item.task_count for item in self.subject_summaries) != (8, 4):
+            raise ValueError("Agent Eval subject task counts do not match Suite v1")
+        if sum(item.task_count for item in self.subject_summaries) != self.task_count:
+            raise ValueError("Agent Eval subject task counts do not match the Suite")
+        if self.metrics.total_agent_steps < self.metrics.total_agent_tool_calls:
+            raise ValueError("Agent Eval tool calls exceed total Agent steps")
+        passed = sum(item.passed_count for item in self.subject_summaries)
+        if abs(self.metrics.task_success_rate - (passed / self.task_count)) > 1e-12:
+            raise ValueError("Agent Eval task rate does not match subject summaries")
+        formal_rates = (
+            self.metrics.task_success_rate,
+            self.metrics.grounded_claim_rate,
+            self.metrics.tool_selection_accuracy,
+            self.metrics.recovery_rate,
+            self.metrics.budget_compliance_rate,
+            self.metrics.replay_fidelity_rate,
+            self.metrics.tamper_rejection_rate,
+        )
+        expected_formal = (
+            all(rate == 1.0 for rate in formal_rates)
+            and self.metrics.unauthorized_effect_count == 0
+            and self.metrics.protected_profile_read_count == 0
+            and self.metrics.strategy_write_count == 0
+            and all(
+                item.passed_count == item.task_count for item in self.subject_summaries
+            )
+        )
+        if self.formal_passed != expected_formal:
+            raise ValueError("formal Agent Eval does not match its aggregate evidence")
+        return self
+
+
+class QueryConstructorRequest(BaseModel):
+    """Build only from the committed smoke source."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    source: Literal["smoke"] = "smoke"
+
+
+class QueryConstructionCountsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    identity: int = Field(ge=0)
+    adjacent_transposition: int = Field(ge=0)
+    token_order_reversal: int = Field(ge=0)
+
+
+class QueryConstructorResponse(BaseModel):
+    """Aggregate Query-set metadata with no raw Query text or labels."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal["query-constructor-api-summary-v1"]
+    source: Literal["smoke"]
+    query_set_id: str = Field(pattern=r"^query-set-[0-9a-f]{12}$")
+    query_count: int = Field(ge=1)
+    original_count: int = Field(ge=1)
+    synthetic_count: int = Field(ge=0)
+    deduplicated_count: int = Field(ge=0)
+    construction_counts: QueryConstructionCountsResponse
+    formal_evaluation_allowed: Literal[False]
+    locked_profiles_not_read: tuple[Literal["dev"], Literal["test"]]
+    cross_split_collision_status: Literal["not_checked_without_reading_locked_splits"]
+
+    @model_validator(mode="after")
+    def validate_counts(self) -> Self:
+        counts = self.construction_counts
+        if self.query_count != self.original_count + self.synthetic_count:
+            raise ValueError(
+                "Query count does not match original plus synthetic counts"
+            )
+        if counts.identity != self.original_count:
+            raise ValueError("identity count does not match original count")
+        if (
+            counts.adjacent_transposition + counts.token_order_reversal
+            != self.synthetic_count
+        ):
+            raise ValueError(
+                "synthetic construction counts do not match synthetic count"
+            )
+        if (
+            counts.identity
+            + counts.adjacent_transposition
+            + counts.token_order_reversal
+            != self.query_count
+        ):
+            raise ValueError("construction counts do not match Query count")
+        return self
 
 
 RetrievalGateName = Literal[
@@ -598,6 +766,120 @@ def agent_retrieval_analyze(request: RetrievalAnalysisRequest) -> dict:
             detail={
                 "code": "retrieval_analysis_unavailable",
                 "message": "Retrieval analysis workflow unavailable",
+                "trace_id": trace_id,
+            },
+        ) from exc
+
+
+@app.post("/agent/eval/run", response_model=AgentEvalResponse)
+def agent_eval_run(request: AgentEvalRequest) -> dict:
+    """Evaluate Agent behavior without activating or changing any strategy."""
+
+    if not _AGENT_EVAL_LOCK.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "agent_eval_in_progress",
+                "message": "Agent evaluation is already running",
+                "trace_id": current_trace_id(),
+            },
+        )
+    try:
+        result = run_agent_eval_suite(
+            project_root=PROJECT_ROOT,
+            artifact_root=_agent_artifact_root(),
+            suite_id=request.suite,
+            revision_provider=_api_code_revision,
+        )
+        evidence = result.evidence
+        return {
+            "schema_version": "agent-eval-api-summary-v1",
+            "suite_id": evidence.suite_id,
+            "evidence_id": evidence.evidence_id,
+            "execution_id": result.execution.execution_id,
+            "formal_passed": evidence.formal_passed,
+            "task_count": len(evidence.tasks),
+            "metrics": evidence.metrics.model_dump(mode="json"),
+            "subject_summaries": tuple(
+                {
+                    "subject_kind": item.subject_kind,
+                    "task_count": item.task_count,
+                    "passed_count": item.passed_count,
+                }
+                for item in evidence.subject_summaries
+            ),
+            "limitations": evidence.limitations,
+        }
+    except (OSError, RuntimeError, ValueError) as exc:
+        trace_id = current_trace_id()
+        logger.error(
+            "agent_eval_failed",
+            extra={
+                "error_code": classify_error(exc),
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "agent_eval_unavailable",
+                "message": "Agent evaluation unavailable",
+                "trace_id": trace_id,
+            },
+        ) from exc
+    finally:
+        _AGENT_EVAL_LOCK.release()
+
+
+@app.post(
+    "/agent/query-constructor/build",
+    response_model=QueryConstructorResponse,
+)
+def agent_query_constructor_build(request: QueryConstructorRequest) -> dict:
+    """Create an exploratory Query set from smoke without reading locked splits."""
+
+    try:
+        artifact = build_smoke_query_set(
+            project_root=PROJECT_ROOT,
+            source_profile=request.source,
+            revision_provider=_api_code_revision,
+        )
+        store_query_set(
+            artifact,
+            artifact_root=_agent_artifact_root() or PROJECT_ROOT / "runs",
+        )
+        counts = Counter(item.construction.value for item in artifact.cases)
+        return {
+            "schema_version": "query-constructor-api-summary-v1",
+            "source": artifact.source_profile,
+            "query_set_id": artifact.query_set_id,
+            "query_count": artifact.query_count,
+            "original_count": artifact.original_count,
+            "synthetic_count": artifact.synthetic_count,
+            "deduplicated_count": artifact.deduplicated_count,
+            "construction_counts": {
+                "identity": counts["identity"],
+                "adjacent_transposition": counts["adjacent_transposition"],
+                "token_order_reversal": counts["token_order_reversal"],
+            },
+            "formal_evaluation_allowed": artifact.formal_evaluation_allowed,
+            "locked_profiles_not_read": artifact.locked_profiles_not_read,
+            "cross_split_collision_status": artifact.cross_split_collision_status,
+        }
+    except (OSError, RuntimeError, ValueError) as exc:
+        trace_id = current_trace_id()
+        logger.error(
+            "query_constructor_failed",
+            extra={
+                "error_code": classify_error(exc),
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "query_constructor_unavailable",
+                "message": "Query constructor unavailable",
                 "trace_id": trace_id,
             },
         ) from exc

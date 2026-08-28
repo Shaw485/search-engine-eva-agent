@@ -23,7 +23,11 @@ from search_quality.evaluation.artifacts import (
     require_clean_code_revision,
     write_immutable_json,
 )
-from search_quality.evaluation.datasets import EvaluationProfile, sha256_file
+from search_quality.evaluation.datasets import (
+    EvaluationProfile,
+    sha256_file,
+    trusted_project_file,
+)
 from search_quality.evaluation.relevance import RelevancePolicy
 from search_quality.evaluation.retrieval import run_query_scoped_retrieval
 from search_quality.evaluation.retrieval_comparison import (
@@ -394,11 +398,15 @@ class StageRetrievalTools:
         self.artifact_root = configured_root.resolve(strict=True)
         if not self.artifact_root.is_dir():
             raise ValueError("retrieval artifact root must be a directory")
-        self.manifest_path = (
-            self.project_root / "data" / "manifests" / "esci-stage1.json"
+        self.manifest_path = trusted_project_file(
+            project_root=self.project_root,
+            relative_path="data/manifests/esci-stage1.json",
+            max_bytes=1024 * 1024,
         )
-        self.policy_path = (
-            self.project_root / "configs" / "evaluation" / "esci-primary-v1.json"
+        self.policy_path = trusted_project_file(
+            project_root=self.project_root,
+            relative_path="configs/evaluation/esci-primary-v1.json",
+            max_bytes=64 * 1024,
         )
         self.revision_provider = revision_provider
         self._lock = threading.RLock()

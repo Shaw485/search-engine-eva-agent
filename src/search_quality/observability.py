@@ -24,6 +24,7 @@ from typing import Any, TextIO
 LOG_MODULES = frozenset(
     {
         "agent_model",
+        "agent_eval",
         "agent_optimization",
         "agent_replay",
         "agent_runtime",
@@ -35,6 +36,7 @@ LOG_MODULES = frozenset(
         "data",
         "evaluation",
         "ranking",
+        "query_constructor",
         "retrieval",
         "retrieval_analysis",
         "stage_diagnosis",

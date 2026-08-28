@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from search_quality.evaluation import retrieval
 from search_quality.evaluation.datasets import EvaluationProfile
 from search_quality.evaluation.metrics import mean_recall_at_k, recall_at_k
 from search_quality.evaluation.relevance import RelevancePolicy
@@ -115,6 +116,47 @@ def test_dev_is_rejected_before_the_data_file_is_checked() -> None:
             project_root=ROOT,
             code_revision="a" * 40,
         )
+
+
+def test_smoke_symlink_is_rejected_before_source_hash_or_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    samples = tmp_path / "data" / "samples"
+    samples.mkdir(parents=True)
+    protected = tmp_path / "locked-test.parquet"
+    protected.write_bytes(b"protected sentinel must not be opened")
+    linked = samples / "esci-stage1-smoke.parquet"
+    linked.symlink_to(protected)
+    profile = EvaluationProfile(
+        profile_id="smoke",
+        path=linked,
+        file_sha256="a" * 64,
+        canonical_sha256="b" * 64,
+        stage1_manifest_sha256="c" * 64,
+        stage1_schema_version="esci-stage1-manifest-v1",
+        source_commit="d" * 40,
+        expected_rows=1,
+        expected_queries=1,
+        expected_products=1,
+    )
+    source_opened = False
+
+    def forbidden_hash(_path):
+        nonlocal source_opened
+        source_opened = True
+        raise AssertionError("source hashing must not run")
+
+    monkeypatch.setattr(retrieval, "sha256_file", forbidden_hash)
+    with pytest.raises(ValueError, match="symbolic link"):
+        run_query_scoped_retrieval(
+            profile,
+            policy=_policy(),
+            policy_path=ROOT / "configs/evaluation/esci-primary-v1.json",
+            project_root=tmp_path,
+            code_revision="a" * 40,
+        )
+    assert source_opened is False
 
 
 def test_retrieval_logs_are_module_scoped_and_do_not_leak_evidence() -> None:

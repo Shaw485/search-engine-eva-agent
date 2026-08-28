@@ -168,6 +168,29 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
   仍待 Owner 日后用自己的话复述。
 - 状态：**Explanation delivered; independent verification pending**
 
+## 当前插入知识：Agent Eval 必须有独立 Oracle
+
+【必学知识提醒】
+
+- 当前知识：Search Evaluation Harness 判“搜索结果好不好”；Agent Evaluation
+  Harness 判“Agent 有没有正确完成任务”。Agent Eval 的 Oracle 必须独立于被测
+  Planner，不能调用 Planner 自己的决策函数生成标准答案。
+- 为什么现在必须理解：如果 Agent 既作答又出答案，即使 12/12 也可能只是同一
+  错误被复制两次。相反，在没有安全提升时正确停止，虽然没有产出优化策略，仍可
+  算 Agent 任务成功；碰巧取得高搜索分但越权、伪造证据或超预算则应判失败。
+- 最低掌握范围：能区分“搜索质量分数”和“Agent 任务分数”；能说明静态 Oracle
+  为什么要检查终态、工具顺序、证据、预算、Replay 和副作用，而不是只看最终文案。
+- 具体例子：`eval-no-safe-candidate` 的正确答案是停止并报告
+  `no_safe_improvement`，不是为了让指标看起来上涨而强行选择候选；
+  `eval-trace-tamper-rejected` 即使原搜索结果不变，也必须拒绝被改写的 Trace。
+- Query 构造边界：相邻字母调换和词序反转可以发现拼写/顺序敏感 Bad Case，
+  但它们没有 Amazon ESCI 新标签，不能继承源 Query 的判断并计算正式 nDCG/MRR。
+- 验证证据：2026-08-29 已实现 12 个固定任务、静态 Oracle、固定工作流对照和
+  smoke-only Query 构造器；实现测试 12/12，其中 8 项使用生产 Planner，4 项是
+  Harness stimulus 对 Runtime 的围栏测试。Owner 本轮“执行”是推进授权，不是
+  独立理解证据，也不解锁 500-Query dev 或 frozen test。
+- 状态：**Explanation delivered; independent verification pending**
+
 ## 检查点记录
 
 完成一个检查点后，在这里追加简短记录：

@@ -85,6 +85,236 @@ def test_retrieval_analysis_route_has_a_strict_success_contract() -> None:
     assert api.RetrievalAnalysisResponse.model_config["extra"] == "forbid"
 
 
+def test_agent_eval_endpoint_returns_only_aggregate_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metrics = {
+        "task_success_rate": 1.0,
+        "grounded_claim_rate": 1.0,
+        "tool_selection_accuracy": 1.0,
+        "recovery_rate": 1.0,
+        "budget_compliance_rate": 1.0,
+        "replay_fidelity_rate": 1.0,
+        "tamper_rejection_rate": 1.0,
+        "unauthorized_effect_count": 0,
+        "protected_profile_read_count": 0,
+        "strategy_write_count": 0,
+        "total_agent_steps": 35,
+        "total_agent_tool_calls": 27,
+        "comparable_workflow_success_rate": 1.0,
+        "comparable_workflow_tool_calls": 12,
+    }
+    evidence = SimpleNamespace(
+        suite_id="stage5-retrieval-v1",
+        evidence_id="agent-eval-aaaaaaaaaaaa",
+        formal_passed=True,
+        tasks=[object()] * 12,
+        metrics=SimpleNamespace(model_dump=lambda **_kwargs: metrics),
+        subject_summaries=(
+            SimpleNamespace(
+                subject_kind="production_planner", task_count=8, passed_count=8
+            ),
+            SimpleNamespace(
+                subject_kind="harness_stimulus", task_count=4, passed_count=4
+            ),
+        ),
+        limitations=(
+            "scripted_failures_do_not_prove_worker_deadline_enforcement",
+            "contract_fixtures_test_runtime_behavior_not_search_quality",
+            "grounded_claim_rate_v1_is_terminal_grounding_proxy",
+        ),
+    )
+
+    def run(**kwargs):
+        assert kwargs["project_root"] == api.PROJECT_ROOT
+        assert kwargs["suite_id"] == "stage5-retrieval-v1"
+        assert kwargs["revision_provider"] is api._api_code_revision
+        return SimpleNamespace(
+            evidence=evidence,
+            execution=SimpleNamespace(
+                execution_id="agent-eval-execution-" + ("b" * 32)
+            ),
+        )
+
+    monkeypatch.setattr(api, "run_agent_eval_suite", run)
+    response = api.agent_eval_run(api.AgentEvalRequest())
+    validated = api.AgentEvalResponse.model_validate(response, strict=True)
+
+    assert validated.formal_passed is True
+    assert validated.task_count == 12
+    assert validated.metrics.comparable_workflow_success_rate == 1.0
+    assert validated.subject_summaries[0].subject_kind == "production_planner"
+    assert "tasks" not in response
+    assert "query_text" not in json.dumps(response)
+
+    contradictory = dict(response)
+    contradictory["metrics"] = dict(response["metrics"])
+    contradictory["metrics"]["strategy_write_count"] = 1
+    with pytest.raises(ValueError, match="formal Agent Eval"):
+        api.AgentEvalResponse.model_validate(contradictory, strict=True)
+
+    wrong_attribution = dict(response)
+    wrong_attribution["subject_summaries"] = (
+        {"subject_kind": "production_planner", "task_count": 7, "passed_count": 7},
+        {"subject_kind": "harness_stimulus", "task_count": 5, "passed_count": 5},
+    )
+    with pytest.raises(ValueError, match="Suite v1"):
+        api.AgentEvalResponse.model_validate(wrong_attribution, strict=True)
+
+    impossible_cost = dict(response)
+    impossible_cost["metrics"] = dict(response["metrics"])
+    impossible_cost["metrics"]["total_agent_steps"] = 26
+    with pytest.raises(ValueError, match="tool calls exceed"):
+        api.AgentEvalResponse.model_validate(impossible_cost, strict=True)
+
+
+def test_agent_eval_rejects_concurrent_run() -> None:
+    assert api._AGENT_EVAL_LOCK.acquire(blocking=False)
+    try:
+        with pytest.raises(HTTPException) as captured:
+            api.agent_eval_run(api.AgentEvalRequest())
+    finally:
+        api._AGENT_EVAL_LOCK.release()
+
+    assert captured.value.status_code == 409
+    assert captured.value.detail["code"] == "agent_eval_in_progress"
+
+
+def test_agent_eval_failure_is_safe_and_omits_trace_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream = io.StringIO()
+    configure_logging(
+        default_level="OFF",
+        module_levels={"api": "INFO"},
+        stream=stream,
+    )
+
+    def fail(**_kwargs):
+        raise ValueError("private query, raw Trace and /private/eval/path")
+
+    monkeypatch.setattr(api, "run_agent_eval_suite", fail)
+    with logging_context(trace_id="agent-eval-api-safe"):
+        with pytest.raises(HTTPException) as captured:
+            api.agent_eval_run(api.AgentEvalRequest())
+
+    assert captured.value.status_code == 503
+    assert captured.value.detail == {
+        "code": "agent_eval_unavailable",
+        "message": "Agent evaluation unavailable",
+        "trace_id": "agent-eval-api-safe",
+    }
+    log = stream.getvalue()
+    assert "private query" not in log
+    assert "raw Trace" not in log
+    assert "/private/eval/path" not in log
+    event = json.loads(log)
+    assert event["event"] == "agent_eval_failed"
+    assert event["error_type"] == "ValueError"
+
+
+def test_query_constructor_endpoint_is_smoke_only_and_returns_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = SimpleNamespace(
+        source_profile="smoke",
+        query_set_id="query-set-cccccccccccc",
+        query_count=59,
+        original_count=20,
+        synthetic_count=39,
+        deduplicated_count=1,
+        cases=(
+            [SimpleNamespace(construction=SimpleNamespace(value="identity"))] * 20
+            + [
+                SimpleNamespace(
+                    construction=SimpleNamespace(value="adjacent_transposition")
+                )
+            ]
+            * 20
+            + [
+                SimpleNamespace(
+                    construction=SimpleNamespace(value="token_order_reversal")
+                )
+            ]
+            * 19
+        ),
+        formal_evaluation_allowed=False,
+        locked_profiles_not_read=("dev", "test"),
+        cross_split_collision_status="not_checked_without_reading_locked_splits",
+    )
+    stored: list[tuple[object, object]] = []
+
+    def build(**kwargs):
+        assert kwargs == {
+            "project_root": api.PROJECT_ROOT,
+            "revision_provider": api._api_code_revision,
+            "source_profile": "smoke",
+        }
+        return artifact
+
+    monkeypatch.setattr(api, "build_smoke_query_set", build)
+    monkeypatch.setattr(
+        api,
+        "store_query_set",
+        lambda value, **kwargs: stored.append((value, kwargs["artifact_root"])),
+    )
+    response = api.agent_query_constructor_build(api.QueryConstructorRequest())
+    validated = api.QueryConstructorResponse.model_validate(response, strict=True)
+
+    assert validated.query_count == 59
+    assert validated.construction_counts.identity == 20
+    assert validated.construction_counts.adjacent_transposition == 20
+    assert validated.construction_counts.token_order_reversal == 19
+    assert validated.formal_evaluation_allowed is False
+    assert stored and stored[0][0] is artifact
+    assert "cases" not in response
+
+    contradictory = dict(response)
+    contradictory["synthetic_count"] = 38
+    with pytest.raises(ValueError, match="original plus synthetic"):
+        api.QueryConstructorResponse.model_validate(contradictory, strict=True)
+
+
+def test_query_constructor_failure_is_safe_and_omits_source_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream = io.StringIO()
+    configure_logging(
+        default_level="OFF",
+        module_levels={"api": "INFO"},
+        stream=stream,
+    )
+
+    def fail(**_kwargs):
+        raise ValueError("private query, source row and /private/source/path")
+
+    monkeypatch.setattr(api, "build_smoke_query_set", fail)
+    with logging_context(trace_id="query-constructor-api-safe"):
+        with pytest.raises(HTTPException) as captured:
+            api.agent_query_constructor_build(api.QueryConstructorRequest())
+
+    assert captured.value.status_code == 503
+    assert captured.value.detail == {
+        "code": "query_constructor_unavailable",
+        "message": "Query constructor unavailable",
+        "trace_id": "query-constructor-api-safe",
+    }
+    log = stream.getvalue()
+    assert "private query" not in log
+    assert "source row" not in log
+    assert "/private/source/path" not in log
+    event = json.loads(log)
+    assert event["event"] == "query_constructor_failed"
+    assert event["error_type"] == "ValueError"
+
+
+def test_new_agent_tool_requests_forbid_overrides() -> None:
+    with pytest.raises(ValueError):
+        api.AgentEvalRequest(suite="stage5-retrieval-v1", profile="test")
+    with pytest.raises(ValueError):
+        api.QueryConstructorRequest(source="smoke", source_path="/private/data")
+
+
 def test_runtime_response_rejects_two_failed_attempts_before_success() -> None:
     baseline = {
         "evidence_ref": "run:retrieval-aaaaaaaaaaaa",

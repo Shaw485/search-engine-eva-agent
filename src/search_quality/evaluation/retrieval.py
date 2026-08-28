@@ -17,7 +17,12 @@ import polars as pl
 
 from search_quality.evaluation.authorization import ensure_profile_authorized
 from search_quality.evaluation.baseline import validate_evaluation_frame
-from search_quality.evaluation.datasets import EvaluationProfile, sha256_file
+from search_quality.evaluation.datasets import (
+    EvaluationProfile,
+    sha256_file,
+    trusted_profile_data_path,
+    trusted_project_file,
+)
 from search_quality.evaluation.metrics import (
     ndcg_at_k,
     recall_at_k,
@@ -218,13 +223,20 @@ def run_query_scoped_retrieval(
         raise ValueError("code_revision must be a full lowercase Git commit SHA")
     if profile.profile_id != "smoke":
         raise ValueError("query-scoped retrieval v0 is smoke-only")
-    contract_path = Path(profile_config_path or root / DEFAULT_PROFILE_CONFIG)
+    source_path = trusted_profile_data_path(profile, project_root=root)
+    contract_path = (
+        trusted_project_file(
+            project_root=root,
+            relative_path=DEFAULT_PROFILE_CONFIG,
+            max_bytes=64 * 1024,
+        )
+        if profile_config_path is None
+        else Path(profile_config_path)
+    )
     contract = _load_profile_contract(contract_path)
     policy_file = Path(policy_path)
 
-    if not profile.path.is_file():
-        raise FileNotFoundError(profile.path)
-    observed_source_sha = sha256_file(profile.path)
+    observed_source_sha = sha256_file(source_path)
     if observed_source_sha != profile.file_sha256:
         raise ValueError("source data does not match its Stage 1 manifest")
     if observed_source_sha != contract["source_file_sha256"]:
@@ -234,7 +246,9 @@ def run_query_scoped_retrieval(
     if sha256_file(policy_file) != contract["policy_file_sha256"]:
         raise ValueError("relevance policy does not match the retrieval profile")
 
-    frame = _normalized_frame(profile.path)
+    frame = _normalized_frame(source_path)
+    if sha256_file(source_path) != observed_source_sha:
+        raise ValueError("source data changed while the retrieval run was loading")
     validate_evaluation_frame(frame)
     if not bool(frame.get_column("is_smoke").all()):
         raise ValueError("smoke retrieval profile contains non-smoke rows")

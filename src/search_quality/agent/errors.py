@@ -14,3 +14,11 @@ class AgentPolicyError(RuntimeError):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+class AgentReplayError(ValueError):
+    """Stable, privacy-safe failure raised by offline Trace validation."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code

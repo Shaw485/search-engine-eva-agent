@@ -19,6 +19,42 @@ def sha256_file(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+def trusted_project_file(
+    *,
+    project_root: str | Path,
+    relative_path: str | Path,
+    max_bytes: int | None = None,
+) -> Path:
+    """Return one fixed project file after rejecting path indirection.
+
+    Callers supply a code-owned relative path, never user input.  Every path
+    component is checked before a later parser or hash function can open it.
+    """
+
+    root = Path(project_root).resolve(strict=True)
+    relative = Path(relative_path)
+    if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+        raise ValueError("trusted project file must use a contained relative path")
+    path = root / relative
+    cursor = root
+    for part in relative.parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            raise ValueError(
+                "trusted project file path must not contain a symbolic link"
+            )
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    if path.resolve(strict=True) != path:
+        raise ValueError("trusted project file escaped its fixed location")
+    if max_bytes is not None:
+        if max_bytes < 1:
+            raise ValueError("trusted project file size limit must be positive")
+        if path.stat().st_size > max_bytes:
+            raise ValueError("trusted project file exceeds its size limit")
+    return path
+
+
 @dataclass(frozen=True, slots=True)
 class EvaluationProfile:
     """Immutable contract tying one run to a Stage 1 output and manifest."""
@@ -93,3 +129,50 @@ class EvaluationProfile:
             "stage1_manifest_sha256": self.stage1_manifest_sha256,
             "stage1_schema_version": self.stage1_schema_version,
         }
+
+
+def trusted_profile_data_path(
+    profile: EvaluationProfile,
+    *,
+    project_root: str | Path,
+) -> Path:
+    """Resolve an allowlisted profile path without following any symlink."""
+
+    root = Path(project_root).resolve(strict=True)
+    requested = Path(profile.path)
+    if not requested.is_absolute():
+        requested = root / requested
+    if profile.profile_id == "smoke":
+        trusted_parent = root / "data" / "samples"
+        expected = trusted_parent / "esci-stage1-smoke.parquet"
+        if requested != expected:
+            raise ValueError("smoke profile path is outside the trusted contract")
+    else:
+        trusted_parent = root / "data" / "processed" / "esci-stage1-v1"
+        expected = None
+        try:
+            requested.relative_to(trusted_parent)
+        except ValueError as exc:
+            raise ValueError(
+                "evaluation profile path escaped its trusted root"
+            ) from exc
+
+    try:
+        relative = requested.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("evaluation profile path escaped the project root") from exc
+    cursor = root
+    for part in relative.parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            raise ValueError("evaluation profile path must not contain a symbolic link")
+    if not requested.is_file():
+        raise FileNotFoundError(requested)
+    resolved = requested.resolve(strict=True)
+    if expected is not None and resolved != expected:
+        raise ValueError("smoke profile path does not match its fixed location")
+    try:
+        resolved.relative_to(trusted_parent)
+    except ValueError as exc:
+        raise ValueError("evaluation profile path escaped its trusted root") from exc
+    return resolved

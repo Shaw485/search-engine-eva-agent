@@ -27,6 +27,8 @@ stderr. Normal CLI results remain on stdout.
 | `agent_trace` | Trace artifact publication | `WARNING` |
 | `agent_replay` | Offline Trace validation and Replay lifecycle | `WARNING` |
 | `agent_optimization` | Strategy proposal, decision and catalog lifecycle | `WARNING` |
+| `agent_eval` | Fixed Agent task suite, independent grading and artifact publication | `WARNING` |
+| `query_constructor` | Source-bounded Query construction and immutable storage | `WARNING` |
 | `retrieval` | Label-blind recall channels, fusion, stage retention and retrieval Runs | `WARNING` |
 | `stage_diagnosis` | Stage evidence validation and bottleneck diagnosis | `WARNING` |
 | `retrieval_analysis` | Bounded experiment orchestration and artifact publication | `WARNING` |
@@ -46,6 +48,8 @@ export SEARCH_LOG_LEVEL_EVALUATION=INFO
 export SEARCH_LOG_LEVEL_RANKING=DEBUG
 export SEARCH_LOG_LEVEL_CATALOG=INFO
 export SEARCH_LOG_LEVEL_AGENT_RUNTIME=DEBUG
+export SEARCH_LOG_LEVEL_AGENT_EVAL=INFO
+export SEARCH_LOG_LEVEL_QUERY_CONSTRUCTOR=INFO
 export SEARCH_LOG_LEVEL_RETRIEVAL=DEBUG
 export SEARCH_LOG_LEVEL_RETRIEVAL_ANALYSIS=INFO
 export SEARCH_LOG_LEVEL_STAGE_DIAGNOSIS=INFO
@@ -87,6 +91,15 @@ JSON diagnostics separate from the normal result:
   "$TRACE_ID" \
   --log-module agent_replay=DEBUG \
   2>agent-replay.jsonl
+
+.venv/bin/python -m search_quality.agent_eval.cli \
+  --suite stage5-retrieval-v1 \
+  --log-module agent_eval=INFO \
+  2>agent-eval.jsonl
+
+.venv/bin/python -m search_quality.query_constructor.cli \
+  --log-module query_constructor=INFO \
+  2>query-constructor.jsonl
 ```
 
 To isolate one subsystem, set the global level to `OFF` and enable only that
@@ -221,6 +234,25 @@ artifact root private and review exports. A stored analysis is evidence only:
 it does not create a proposal decision, strategy-catalog entry or active search
 configuration.
 
+Agent Eval emits suite/task start and completion, artifact publication and
+command failure events through `agent_eval`. Safe fields are fixed suite/task,
+evidence/execution IDs, categories, counts, pass status, reason codes and
+durations. Action arguments, observations, Query text, product content, paths
+and exception messages never enter diagnostics. Deterministic evidence under
+`agent-evals/evidence/` excludes timestamps, dynamic Trace IDs and durations;
+those belong to a separate execution receipt. Repeated semantic runs can
+therefore share an evidence identity while retaining per-execution diagnostics.
+The runner refuses new work once the Agent Eval artifact tree exceeds 2 GiB;
+this bounds diagnostic/evidence growth without silently deleting cited evidence.
+
+The Query constructor emits construction start/completion, storage and command
+failure events through `query_constructor`. It logs only profile, source hash,
+Query-set ID and aggregate counts. Raw original and synthetic Query text exists
+only in the private immutable `query-sets/` artifact. Production enables these
+two modules at `INFO` in systemd while keeping per-Query ranking diagnostics
+off; journald provides the same centralized retention and rotation described
+below.
+
 ## Privacy and public errors
 
 The formatter normalizes case, punctuation and camelCase before recursively
@@ -308,6 +340,13 @@ systemd-analyze cat-config systemd/journald.conf
     `agent_runtime`; enable `agent_runtime=INFO,agent_tools=INFO` to isolate the
     ordered Agent/tool boundaries, then enable `retrieval` or `stage_diagnosis`
     only when the lower-level search stage is the suspected fault.
+15. `agent_eval`: run `make agent-eval` with only `agent_eval=INFO`; filter by
+    `suite_id`, `task_id` or `evidence_id`. Enable `agent_runtime` or
+    `agent_replay` separately only when that boundary is under investigation.
+    Detailed Trace evidence remains private.
+16. `query_constructor`: run `make query-set-smoke` with only
+    `query_constructor=INFO`; filter by `query_set_id`. Inspect the private
+    artifact for case text; logs deliberately expose only counts and hashes.
 
 `tests/test_observability.py` and `tests/test_catalog_search.py` verify JSON structure, module isolation,
 redaction variants, error classification, stable events, low-noise defaults and
@@ -329,3 +368,9 @@ strategy. Retrieval Runtime component and API tests also verify minimal
 capabilities, bounded retry, semantic action order, Trace/Replay consistency and
 that the browser summary contains evidence IDs and gate names rather than raw
 Query or product content.
+Agent Eval tests verify all 12 static Oracles, deterministic evidence identity,
+dynamic execution receipts, Replay/tamper behavior, zero strategy writes and
+module-specific privacy. Query-constructor tests verify smoke-only authorization
+before reads, projected-column minimization, global de-duplication, no label
+inheritance, confined immutable storage and log privacy. Deployment tests keep
+both exact API locations behind Basic Auth and strip the Authorization header.

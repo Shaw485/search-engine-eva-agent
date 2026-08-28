@@ -240,6 +240,8 @@ def run_candidate_baseline(
         )
     normalized_ranker_options = _normalize_ranker_options(ranker_name, ranker_options)
     path = profile.path
+    if path.is_symlink():
+        raise ValueError("evaluation profile path must not be a symbolic link")
     if not path.is_file():
         raise FileNotFoundError(path)
     code_revision = code_revision.strip()

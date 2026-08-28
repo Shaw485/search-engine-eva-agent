@@ -1,0 +1,19 @@
+{
+  "constructor_id": "source-bounded-query-constructor-v1",
+  "eval_split": "dev",
+  "expected_query_count": 20,
+  "is_smoke": true,
+  "locale": "us",
+  "origin_split": "train",
+  "profile": "smoke",
+  "query_keys_sha256": "934f09cacfcc84b8ba20b5b681089f7fc9da7b7487f7082e5783648ef03d3adb",
+  "schema_version": "query-constructor-source-v1",
+  "source_canonical_sha256": "9cc75ff6896e19f7fef9e98309f4924db2cbca87a708c93c3920a19592cc976a",
+  "source_commit": "7916cdf6ab75a462e77f20ab40428a10923998d5",
+  "source_file_sha256": "b0512f03c0a11ff443f3dab4336c9780e75d8f0b18f1cc30c047ef777603a9a7",
+  "source_id": "esci-stage1-smoke-v1",
+  "source_relative_path": "data/samples/esci-stage1-smoke.parquet",
+  "stage1_manifest_relative_path": "data/manifests/esci-stage1.json",
+  "stage1_manifest_sha256": "5da414720f95cc19a4488643785142221b609ea81d7ac607b751ab843aafb03c",
+  "stage1_schema_version": "esci-stage1-v1"
+}
