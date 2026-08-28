@@ -32,6 +32,29 @@ must not be calculated by summing category counts. `overlap_at_k` is only an
 observable set intersection; it is not a relevance score. A changed result is
 never called an improvement, regression, relevance failure, or root cause.
 
+## Verified clean-revision evidence
+
+On 2026-08-29, implementation revision
+`c923174e651f6b1f4f06fc06e7571d0fea0f8463` ran the fixed batch twice against
+the 1,814,924-product index `catalog-baseline-v1-f42e2120a938`:
+
+- Query set: `query-set-a48442f35d30`;
+- deterministic evidence: `bad-case-b2cbe225fea3`;
+- executions: `bad-case-execution-74143e4c33224adabf2456a514f8907e` and
+  `bad-case-execution-070f3524e27c43108c28821415bb0c8c`;
+- both executions completed 59/59 search calls with zero operational failure,
+  protected-profile dispatch or strategy write;
+- 40 unique behavioral candidates were flagged: `zero_result=40`,
+  `spelling_sensitive=10`, `order_sensitive=0`, and
+  `ranking_instability_needs_judgment=0`.
+
+The identical diagnostic ID and distinct execution IDs confirm deterministic
+evidence with separate per-run receipts. The category counts overlap: ten
+zero-result cases are also spelling-sensitive. No relevance label or quality
+metric was used, so this is not evidence of 40 confirmed search defects. Local
+durations are intentionally not recorded as a performance benchmark because
+they depend on filesystem and SQLite cache state.
+
 ## Completion and evidence
 
 Before the first search, all 59 Query strings must satisfy the catalog contract
