@@ -91,15 +91,24 @@ curl http://127.0.0.1:8010/health
 curl --request POST 'https://shawspace.cn/search-eval-api/catalog/search' \
   --header 'Content-Type: application/json' \
   --data '{"query":"wireless mouse","top_k":3}'
+curl --request POST 'https://shawspace.cn/search-eval-api/agent/strategy/propose' \
+  --header 'Content-Type: application/json' \
+  --data '{"profile":"smoke"}'
+curl 'https://shawspace.cn/search-eval-api/agent/strategy/catalog'
 ```
 
 Acceptance requires:
 
 1. Health reports `catalog.status=ready`, the expected index ID and 1,814,924 products.
 2. English, Spanish, Japanese and exact product-ID checks return valid JSON.
-3. The website renders full-catalog results in the left lane.
-4. The optimized lane is still visibly unsupported.
-5. A failed Query can be correlated by `X-Request-ID` without Query text in logs.
+3. The Agent strategy proposal endpoint returns a pending proposal with baseline
+   Run ID, candidate Run ID, comparison ID, aggregate metric deltas and bad-case
+   examples.
+4. The strategy catalog endpoint returns the current approved runtime strategy
+   list. It can be empty before the Owner approves a proposal.
+5. The website renders full-catalog results in the left lane.
+6. The optimized lane is still visibly unsupported.
+7. A failed Query can be correlated by `X-Request-ID` without Query text in logs.
 
 Use a response request ID to inspect safe diagnostics:
 
