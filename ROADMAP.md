@@ -4,7 +4,7 @@
 >
 > 更新日期：2026-08-28
 >
-> 当前状态：全量商品网站基线已部署；smoke-only Agent 策略提案/审批接口进入实现；Owner 体验与阶段 2 评测内核继续进行
+> 当前状态：全量商品网站基线已部署；Runtime/Trace 脚手架与 smoke-only 多候选优化器两条切片已实现但尚未整合；Owner 体验与阶段 2 评测内核继续进行
 >
 > 使用方式：一次只跨越一个验收门槛；Agent 的任何结论必须能够回到确定性实验结果。
 
@@ -387,26 +387,29 @@ Agent 不可以：
 
 ### Now
 
-- 稳定 smoke-only Agent Runtime 脚手架的证据绑定、失败边界与 Replay。
-- 用固定 smoke Run 验证一次“比较 → 观察退化 → 下钻 Query → 终态”分支。
-- 用 `docs/AGENT_FLOW.md` 把任务、Planner、Runtime、工具、Trace 和 Replay
-  的关系视觉化，避免把搜索 Demo、Search Harness 和 Agent 控制层混在一起。
+- 保持 Runtime/Trace 脚手架与确定性优化器的能力边界清晰，不能把两条切片
+  描述成一次已经可 Replay 的完整优化 Agent Run。
+- 用固定 smoke 集持续验证“诊断 → 多候选实验 → Harness → 七项门禁 →
+  提案 → 服务端决策 → 下一轮 active 基线”。
+- 工作台展示根因、候选配置、三项核心指标、七项门禁和逐 Query 前后结果；
+  浏览器仍无审批权，active 仍不影响 `/catalog/search`。
 - 关键知识随进度提供说明但不进行问答；500-Query dev 继续代码锁定。
 
 ### Next
 
+- 把诊断、候选搜索、实验和提案动作接入 Agent Runtime，使一次优化可以生成
+  完整 Trace 并在观察变化或工具失败时改道。
 - 建立至少 10 个固定 Agent 任务和 Agent Eval 判定，区分 Runtime 正确与
   Planner 任务完成质量。
-- 增加 StrategyProposal artifact：Agent 主动发现 bad case、提出候选策略、
-  调 Harness 比较，并生成待审批结果。
-- 接入第一个真实模型 Planner，但继续使用相同 Tool Schema、权限和证据约束。
-- 在接入任何网络/模型工具前加入可强制终止的 worker deadline。
+- 实现有来源边界的 Query 构造器、分桶与更大已标注验证；不解锁 frozen test。
+- 实现认证 Owner 审批、CSRF、审计身份、验证后生效和可验证回滚。
 
 ### Later
 
-- Multi-field BM25、Vector、Hybrid、Rerank。
-- Bad Case 黄金集、自动实验 Agent 和策略审批面板。
-- Web Agent 工作台、部署和作品集交付。
+- Multi-field BM25、纠错、Vector、Hybrid、Rerank 和业务重排等更多白名单策略。
+- 在 worker deadline、调用/Token/费用预算和严格 DSL 下接入可选模型 Planner；
+  模型只提假设，不计算指标或批准发布。
+- Bad Case 黄金集、流量分桶、置信区间和线上灰度指标。
 
 ## 7. 关键学习路线
 
@@ -481,10 +484,11 @@ Agent 不可以：
 
 ## 10. 当前唯一下一步
 
-完成并验收 smoke-only Agent Runtime 确定性垂直切片：四个工具严格
-输入/输出、任务有序比较证据绑定、观察驱动分支、有限预算、Trace 与离线
-Replay。该工作不依赖也不解锁 500-Query dev。
+把已经实现的确定性优化器动作封装为 Runtime 工具和观察驱动 Planner：一次
+Agent Run 必须能在 Trace 中证明它为何选择 Bad Case、为何试某个候选、为何
+因门禁失败而改道或以 `requires_engineering` 停止。随后用固定 Agent 任务集
+评测这条完整链路。
 
-随后建立固定 Agent 任务集，再接入真实模型 Planner。500-Query dev 仍需
-独立学习证据和明确解锁决定；无论“继续”还是完成 Runtime 代码都不会自动
-跨越该门禁。
+该工作不依赖也不解锁 500-Query dev。更大验证、真实模型 Planner、浏览器
+审批和线上生效仍分别需要数据学习证据、安全机制与 Owner 明确决策；“继续”
+不会自动跨越这些门禁。

@@ -28,21 +28,22 @@ per-Query ranking differences. Execution remains smoke-only: the 500-Query dev
 profile is code-locked until the Owner data-boundary checkpoint is recorded, and
 the 8,956-Query frozen test remains unavailable to tuning runs.
 
-A smoke-only Stage 3/4 scaffold now exposes strictly typed evaluation tools
-through a finite Runtime, branches on comparison observations, stores an
-offline-replayable Trace, and has an API-first strategy proposal loop for the
-portfolio Agent workbench. The proposal loop now diagnoses title-ranking
-failure signals, selects a bounded set of exact-boost parameter candidates,
-runs each candidate against the current active baseline, and applies explicit
-aggregate and Query-regression gates before choosing one proposal. The first
-round starts from title BM25; after approval, the next round uses the approved
-strategy and skips duplicate candidates. It writes
-approve/reject decisions plus approved runtime strategies under ignored
-`runs/` locally or a private production artifact root. The public workbench can
-request and inspect proposals; approve/reject remains restricted to the server's
-loopback owner channel until real owner authentication exists. Its planner is
-still bounded and deterministic; this proves the
-control/evidence path, not completed LLM reasoning or production search quality.
+A smoke-only Stage 3/4 Runtime scaffold exposes strictly typed evaluation tools,
+branches on comparison observations, and stores an offline-replayable Trace.
+Separately, an API-first deterministic optimizer powers the portfolio Agent
+workbench; these two slices are not yet one Runtime execution or Trace.
+
+The optimizer diagnoses title-ranking failure signals, selects a bounded set of
+exact-boost candidates, runs each against the current active baseline, and
+applies seven aggregate and Query-regression gates before choosing a proposal.
+The first round starts from title BM25; after approval, the next optimizer round
+uses the approved config and skips duplicates. It writes approve/reject
+decisions plus approved optimizer-baseline configs under ignored `runs/`
+locally or a private production artifact root. The public workbench can request
+and inspect proposals; approve/reject remains restricted to the server's
+loopback Owner channel until real authentication exists. The active config does
+not yet change `/catalog/search`. This proves a bounded control/evidence path,
+not completed LLM reasoning or production search quality.
 
 The optional OpenSearch 3.8.0 adapter, mapping, and Apple Silicon-compatible
 Compose profile are implemented. Live container verification remains pending

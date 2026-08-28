@@ -119,7 +119,7 @@ The artifact should contain:
 - worst regressions;
 - approval status: `pending` in the immutable proposal; decisions are separate
   immutable artifacts keyed by proposal ID;
-- the active runtime strategy path if approval applied a catalog update.
+- the active optimizer-baseline config path if approval applied a catalog update.
 
 The current strategy family is intentionally simple and explainable:
 `candidate-title-bm25-exact-boost-v1`. It adds deterministic boosts for Query
@@ -142,8 +142,9 @@ The complete design, model boundary and tool inventory are in
 You can say:
 
 > I changed the product direction from a passive Run comparison tool into an
-> approval-gated optimization Agent. The Agent is expected to find bad cases,
-> propose bounded strategy changes, run the Harness, compare evidence, and show
-> an approval panel. Humans decide whether the tradeoff is acceptable; once
-> approved, the system can automatically write a versioned strategy update and
-> rerun validation.
+> approval-gated optimization Agent. The current smoke slice finds bad cases,
+> tries bounded exact-boost changes, runs the Harness, compares evidence, and
+> writes an approved config for the next optimizer round through a server-only
+> decision channel. It does not yet rerun a larger validation set or change the
+> live catalog search. Those are explicit next milestones before production
+> activation or rollback can be claimed.

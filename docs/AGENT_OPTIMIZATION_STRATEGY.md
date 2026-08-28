@@ -23,7 +23,9 @@ Baseline Run → Bad Case mining → root-cause hypotheses
                                   ↓
                        pending human-reviewed proposal
                                   ↓
-                    validation → activate or rollback
+             current: server-only decision → next optimizer baseline
+                                  ↓
+       TARGET / NOT IMPLEMENTED: larger validation → serving activation / rollback
 ```
 
 The model may propose hypotheses and explain evidence. It is never the source
