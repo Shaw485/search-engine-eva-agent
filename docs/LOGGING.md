@@ -243,7 +243,9 @@ pipeline/channel IDs, counts, ranks and durations. `stage_diagnosis` emits
 and `stage_diagnosis_failed`; `retrieval_analysis` emits
 `retrieval_analysis_artifacts_stored` after the bounded experiment set is
 durably published. These use only content-addressed evidence IDs,
-category/count summaries and stable outcomes. None logs raw Query text,
+category/count summaries and stable outcomes. Completion events also report
+only the number of changed Query examples split into improvement and regression;
+the protected workbench examples themselves remain private evidence. None logs raw Query text,
 product identifiers, titles, labels,
 ranked lists, filesystem paths or exception messages.
 

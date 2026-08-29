@@ -340,7 +340,21 @@ def test_agent_generates_real_strategy_proposal_artifacts(tmp_path: Path) -> Non
     assert proposal["evidence"]["aggregate_metrics"]["ndcg@10"]["delta"] > 0
     assert proposal["evidence"]["bad_cases"]
     query_comparisons = proposal["evidence"]["query_comparisons"]
-    assert len(query_comparisons) == 10
+    assert 0 < len(query_comparisons) <= 10
+    assert {item["outcome"] for item in query_comparisons} <= {
+        "improvement",
+        "regression",
+    }
+    ndcg_outcomes = proposal["evidence"]["outcome_counts"]["ndcg@10"]
+    assert len(query_comparisons) == min(
+        10,
+        ndcg_outcomes["improved"] + ndcg_outcomes["regressed"],
+    )
+    if ndcg_outcomes["improved"] and ndcg_outcomes["regressed"]:
+        assert {item["outcome"] for item in query_comparisons} == {
+            "improvement",
+            "regression",
+        }
     assert all(
         set(item["metrics"]) == {"success@5", "mrr@10", "ndcg@10"}
         for item in query_comparisons
@@ -1304,4 +1318,6 @@ def test_strategy_optimizer_logs_without_query_text(tmp_path: Path) -> None:
     assert event_names.count("strategy_comparison_scored") >= 2
     assert event_names.count("strategy_winner_selected") == 1
     assert all(event["trace_id"] == "strategy-trace" for event in events)
-    assert events[-1]["query_comparison_count"] == 10
+    assert events[-1]["query_comparison_count"] == len(
+        proposal["evidence"]["query_comparisons"]
+    )

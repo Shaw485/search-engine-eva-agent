@@ -1028,14 +1028,36 @@ def _query_comparisons(
                 ),
             }
         )
-    comparisons.sort(
+    changed = [item for item in comparisons if item["outcome"] != "unchanged"]
+    changed.sort(
         key=lambda item: (
             -abs(item["ndcg@10_delta"]),
             item["baseline_ndcg@10"],
             item["query_id"],
         )
     )
-    return comparisons[:QUERY_COMPARISON_LIMIT]
+    selected = changed[:QUERY_COMPARISON_LIMIT]
+    if QUERY_COMPARISON_LIMIT >= 2:
+        available_outcomes = {item["outcome"] for item in changed}
+        selected_outcomes = {item["outcome"] for item in selected}
+        for required_outcome in ("improvement", "regression"):
+            if (
+                required_outcome in available_outcomes
+                and required_outcome not in selected_outcomes
+            ):
+                replacement = next(
+                    item for item in changed if item["outcome"] == required_outcome
+                )
+                selected[-1] = replacement
+                selected_outcomes.add(required_outcome)
+    selected.sort(
+        key=lambda item: (
+            -abs(item["ndcg@10_delta"]),
+            item["baseline_ndcg@10"],
+            item["query_id"],
+        )
+    )
+    return selected
 
 
 def _display_results(

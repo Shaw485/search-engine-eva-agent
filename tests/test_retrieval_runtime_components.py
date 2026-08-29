@@ -214,6 +214,14 @@ def test_real_20_query_path_runs_all_bounded_candidates_and_builds_response(
         response["comparison_id"] == result.report["decision"]["selected_comparison_id"]
     )
     assert response["comparison"]["gate_result"]["passed"] is True
+    assert {item["outcome"] for item in response["changed_query_examples"]} == {
+        "improvement",
+        "regression",
+    }
+    assert all(
+        abs(item["coarse_ndcg@10_delta"]) > 1e-12
+        for item in response["changed_query_examples"]
+    )
 
 
 def test_real_path_persists_only_content_addressed_evidence(

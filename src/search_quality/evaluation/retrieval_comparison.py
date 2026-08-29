@@ -103,7 +103,7 @@ def _validate_compatible_runs(
     return baseline_queries, candidate_queries
 
 
-def _top_results(query: dict[str, Any], *, limit: int = 5) -> list[dict[str, Any]]:
+def _top_results(query: dict[str, Any], *, limit: int = 10) -> list[dict[str, Any]]:
     titles = {
         (item["locale"], item["product_id"]): item["product_title"]
         for item in query["judgments"]

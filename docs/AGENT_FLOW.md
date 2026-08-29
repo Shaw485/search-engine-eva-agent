@@ -118,7 +118,7 @@ diagnoses, comparisons and a Trace only.
 | Start smoke analysis | Implemented through `POST /agent/strategy/propose` |
 | Show diagnosis, candidate experiments, three core metrics, gates and ten Query comparisons | Implemented |
 | Start stage-aware retrieval analysis | Implemented locally through `POST /agent/retrieval/analyze`; reference Nginx config requires Agent credentials |
-| Show recall/fusion/coarse metrics, all RRF candidates, gates and product Top 5 evidence | Implemented locally; not yet claimed deployed |
+| Show recall/fusion/coarse metrics, all RRF candidates, gates and product Top 10 evidence | Implemented locally; not yet claimed deployed |
 | Show the ordered Runtime actions, reasons, gate outcomes, evidence IDs and Trace ID | Implemented locally as a read-only timeline; validated against the backend response |
 | Approve or reject from the public browser | Intentionally disabled |
 | Approve from the server's loopback Owner channel | Implemented with evidence revalidation, trusted gates, active revision check and file lock |

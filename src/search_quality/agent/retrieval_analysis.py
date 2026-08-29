@@ -16,6 +16,7 @@ from search_quality.evaluation.relevance import RelevancePolicy
 from search_quality.evaluation.retrieval import run_query_scoped_retrieval
 from search_quality.evaluation.retrieval_comparison import compare_retrieval_runs
 
+from .retrieval_examples import select_changed_query_examples
 from .stage_diagnosis import diagnose_retrieval_stages
 
 logger = logging.getLogger("search_quality.retrieval_analysis")
@@ -147,6 +148,10 @@ def generate_retrieval_analysis(
         "candidate_diagnosis": candidate_diagnosis,
         "candidate_diagnosis_id": candidate_diagnosis["diagnosis_id"],
         "candidate_run_id": candidate["run_id"],
+        "changed_query_examples": select_changed_query_examples(
+            experiments,
+            selected_candidate_run_id=candidate["run_id"],
+        ),
         "comparison": comparison,
         "comparison_id": comparison["comparison_id"],
         "diagnosis": diagnosis,
@@ -205,10 +210,19 @@ def generate_retrieval_analysis(
         extra={
             "diagnosis_id": diagnosis["diagnosis_id"],
             "candidate_run_id": candidate["run_id"],
+            "changed_query_example_count": len(result["changed_query_examples"]),
             "comparison_id": comparison["comparison_id"],
             "experiment_count": len(experiments),
+            "improvement_example_count": sum(
+                item["outcome"] == "improvement"
+                for item in result["changed_query_examples"]
+            ),
             "pipeline_run_id": baseline["run_id"],
             "profile_id": profile_id,
+            "regression_example_count": sum(
+                item["outcome"] == "regression"
+                for item in result["changed_query_examples"]
+            ),
         },
     )
     return result

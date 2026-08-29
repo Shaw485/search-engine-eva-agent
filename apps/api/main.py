@@ -1273,6 +1273,84 @@ class RetrievalAgentRunResponse(BaseModel):
         return self
 
 
+class RetrievalExampleResultResponse(BaseModel):
+    """One bounded result row displayed inside a protected comparison card."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    label: Literal["E", "S", "C", "I"]
+    locale: str = Field(min_length=1, max_length=32)
+    product_id: str = Field(min_length=1, max_length=128)
+    product_title: str = Field(min_length=1, max_length=2048)
+    rank: int = Field(ge=1, le=10)
+
+
+class RetrievalRecoveredResultResponse(BaseModel):
+    """One relevant item newly recovered by the comparison candidate."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    candidate_first_loss_stage: Literal["fusion", "coarse_rank", "retained"]
+    candidate_multi_field_rank: int | None = Field(default=None, ge=1)
+    label: Literal["E", "S", "C"]
+    locale: str = Field(min_length=1, max_length=32)
+    product_id: str = Field(min_length=1, max_length=128)
+    product_title: str = Field(min_length=1, max_length=2048)
+
+
+class RetrievalChangedQueryExampleResponse(BaseModel):
+    """A non-tied before/after Query example from one bounded experiment."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    baseline_top_results: list[RetrievalExampleResultResponse] = Field(max_length=10)
+    candidate_run_id: str = Field(pattern=r"^retrieval-[0-9a-f]{12}$")
+    candidate_top_results: list[RetrievalExampleResultResponse] = Field(max_length=10)
+    comparison_id: str = Field(pattern=r"^retrieval-comparison-[0-9a-f]{12}$")
+    coarse_ndcg_at_10_delta: float = Field(
+        alias="coarse_ndcg@10_delta",
+        allow_inf_nan=False,
+        ge=-1.0,
+        le=1.0,
+    )
+    fusion_ndcg_at_10_delta: float = Field(
+        alias="fusion_ndcg@10_delta",
+        allow_inf_nan=False,
+        ge=-1.0,
+        le=1.0,
+    )
+    gate_passed: bool
+    is_selected_comparison: bool
+    locale: str = Field(min_length=1, max_length=32)
+    outcome: Literal["improvement", "regression"]
+    pipeline_variant: Literal[
+        "title-exact-multifield-v1",
+        "title-exact-multifield-weighted-v1",
+        "title-exact-multifield-weighted-aggressive-v1",
+    ]
+    query_id: int = Field(ge=1)
+    query_text: str = Field(min_length=1, max_length=512)
+    recovered_relevant: list[RetrievalRecoveredResultResponse]
+    union_coverage_delta: float = Field(
+        allow_inf_nan=False,
+        ge=-1.0,
+        le=1.0,
+    )
+
+    @model_validator(mode="after")
+    def validate_outcome_and_results(self) -> Self:
+        delta = self.coarse_ndcg_at_10_delta
+        if self.outcome == "improvement" and delta <= 1e-12:
+            raise ValueError("improvement example must have positive coarse nDCG delta")
+        if self.outcome == "regression" and delta >= -1e-12:
+            raise ValueError("regression example must have negative coarse nDCG delta")
+        for results in (self.baseline_top_results, self.candidate_top_results):
+            ranks = [item.rank for item in results]
+            if ranks != list(range(1, len(results) + 1)):
+                raise ValueError("comparison result ranks must be contiguous")
+        return self
+
+
 class RetrievalAnalysisResponse(BaseModel):
     """Strict top-level contract for the authenticated Agent workbench."""
 
@@ -1284,6 +1362,9 @@ class RetrievalAnalysisResponse(BaseModel):
     candidate_diagnosis: dict
     candidate_diagnosis_id: str = Field(pattern=r"^stage-diagnosis-[0-9a-f]{12}$")
     candidate_run_id: str = Field(pattern=r"^retrieval-[0-9a-f]{12}$")
+    changed_query_examples: list[RetrievalChangedQueryExampleResponse] = Field(
+        max_length=10
+    )
     comparison: dict
     comparison_id: str = Field(pattern=r"^retrieval-comparison-[0-9a-f]{12}$")
     diagnosis: dict
@@ -1297,6 +1378,35 @@ class RetrievalAnalysisResponse(BaseModel):
     retrieval_run_id: str = Field(pattern=r"^retrieval-[0-9a-f]{12}$")
     schema_version: Literal["retrieval-stage-analysis-response-v1"]
     status: Literal["proposal_ready", "no_safe_improvement"]
+
+    @model_validator(mode="after")
+    def validate_changed_examples(self) -> Self:
+        experiments = {
+            item.get("comparison_id"): item
+            for item in self.experiments
+            if isinstance(item, dict)
+        }
+        keys: set[tuple[str, int, str]] = set()
+        for example in self.changed_query_examples:
+            key = (example.locale, example.query_id, example.outcome)
+            if key in keys:
+                raise ValueError("changed Query examples must be unique by outcome")
+            keys.add(key)
+            source = experiments.get(example.comparison_id)
+            if source is None:
+                raise ValueError("changed Query example has no experiment source")
+            if (
+                source.get("candidate_run_id") != example.candidate_run_id
+                or source.get("pipeline_variant") != example.pipeline_variant
+                or source.get("gate_passed") is not example.gate_passed
+            ):
+                raise ValueError(
+                    "changed Query example source does not match experiment"
+                )
+            selected = example.comparison_id == self.comparison_id
+            if example.is_selected_comparison is not selected:
+                raise ValueError("changed Query example selected state is inconsistent")
+        return self
 
 
 class StrategyDecisionRequest(BaseModel):

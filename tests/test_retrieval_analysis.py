@@ -43,6 +43,16 @@ def test_retrieval_analysis_persists_only_content_addressed_evidence(
         == first["comparison_id"]
     )
     assert first["status"] == "proposal_ready"
+    changed_examples = first["changed_query_examples"]
+    assert {item["outcome"] for item in changed_examples} == {
+        "improvement",
+        "regression",
+    }
+    assert all(abs(item["coarse_ndcg@10_delta"]) > 1e-12 for item in changed_examples)
+    assert all(len(item["baseline_top_results"]) == 10 for item in changed_examples)
+    assert all(len(item["candidate_top_results"]) == 10 for item in changed_examples)
+    assert any(item["is_selected_comparison"] is True for item in changed_examples)
+    assert any(item["is_selected_comparison"] is False for item in changed_examples)
     assert first["proposal"] == {
         "candidate_strategy_id": "multi-field-bm25-weighted-rrf-v1",
         "decision": "request_owner_review",
@@ -100,3 +110,22 @@ def test_retrieval_analysis_logging_is_independent_and_private(tmp_path: Path) -
         ].lower()
         not in serialized
     )
+    regression = next(
+        item
+        for item in result["changed_query_examples"]
+        if item["outcome"] == "regression"
+    )
+    assert regression["query_text"].lower() not in serialized
+    for result_row in (
+        regression["baseline_top_results"] + regression["candidate_top_results"]
+    ):
+        assert result_row["product_id"].lower() not in serialized
+        assert result_row["product_title"].lower() not in serialized
+    completed = next(
+        event
+        for event in events
+        if event["event"] == "retrieval_analysis_artifacts_stored"
+    )
+    assert completed["changed_query_example_count"] == 2
+    assert completed["improvement_example_count"] == 1
+    assert completed["regression_example_count"] == 1
