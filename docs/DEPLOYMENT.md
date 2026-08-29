@@ -86,6 +86,13 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
+The protected locations use the fixed Basic Auth realm `Search Agent Owner`.
+This realm intentionally differs from the earlier prototype realm `Search
+Agent`, so browsers discard stale cached credentials and present a fresh login
+challenge after this release. Keep the realm identical across the page and all
+owner-only API locations. Change it again only as an explicit cache-reset
+operation because every change forces owners to authenticate again.
+
 Only `/search-agent.html`, the proposal endpoint, the stage-aware
 `/agent/retrieval/analyze` endpoint, Agent Eval, the Query constructor, the
 59-Query Bad Case endpoint, the diagnostic experiment planner and all seven

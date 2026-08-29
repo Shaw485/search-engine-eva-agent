@@ -48,29 +48,29 @@ def test_agent_page_and_analysis_endpoints_require_basic_auth() -> None:
         nginx, "= /search-eval-api/agent/diagnostic-experiments/plan"
     )
 
-    assert 'auth_basic "Search Agent";' in agent_page
+    assert 'auth_basic "Search Agent Owner";' in agent_page
     assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in agent_page
     assert 'add_header Cache-Control "no-store" always;' in agent_page
     assert "try_files $uri =404;" in agent_page
 
-    assert 'auth_basic "Search Agent";' in proposal
+    assert 'auth_basic "Search Agent Owner";' in proposal
     assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in proposal
     assert "proxy_pass http://127.0.0.1:8010/agent/strategy/propose;" in proposal
     assert 'proxy_set_header Authorization "";' in proposal
 
-    assert 'auth_basic "Search Agent";' in retrieval
+    assert 'auth_basic "Search Agent Owner";' in retrieval
     assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in retrieval
     assert "proxy_pass http://127.0.0.1:8010/agent/retrieval/analyze;" in retrieval
     assert 'proxy_set_header Authorization "";' in retrieval
     assert "proxy_read_timeout 130s;" in retrieval
 
-    assert 'auth_basic "Search Agent";' in agent_eval
+    assert 'auth_basic "Search Agent Owner";' in agent_eval
     assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in agent_eval
     assert "proxy_pass http://127.0.0.1:8010/agent/eval/run;" in agent_eval
     assert 'proxy_set_header Authorization "";' in agent_eval
     assert "proxy_read_timeout 130s;" in agent_eval
 
-    assert 'auth_basic "Search Agent";' in query_constructor
+    assert 'auth_basic "Search Agent Owner";' in query_constructor
     assert (
         "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in query_constructor
     )
@@ -81,14 +81,14 @@ def test_agent_page_and_analysis_endpoints_require_basic_auth() -> None:
     assert 'proxy_set_header Authorization "";' in query_constructor
     assert "proxy_read_timeout 15s;" in query_constructor
 
-    assert 'auth_basic "Search Agent";' in bad_cases
+    assert 'auth_basic "Search Agent Owner";' in bad_cases
     assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in bad_cases
     assert "proxy_pass http://127.0.0.1:8010/agent/bad-cases/run;" in bad_cases
     assert 'proxy_set_header Authorization "";' in bad_cases
     assert "proxy_read_timeout 140s;" in bad_cases
     assert 'add_header Cache-Control "no-store" always;' in bad_cases
 
-    assert 'auth_basic "Search Agent";' in diagnostic_plan
+    assert 'auth_basic "Search Agent Owner";' in diagnostic_plan
     assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in (
         diagnostic_plan
     )
@@ -117,7 +117,7 @@ def test_human_oracle_routes_are_exact_owner_only_and_strip_credentials() -> Non
         internal = f"http://127.0.0.1:8010/agent/human-oracle/{suffix};"
         location = _nginx_location(nginx, external)
         assert "access_log off;" in location
-        assert 'auth_basic "Search Agent";' in location
+        assert 'auth_basic "Search Agent Owner";' in location
         assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in location
         assert 'add_header Cache-Control "no-store" always;' in location
         assert f"proxy_pass {internal}" in location
