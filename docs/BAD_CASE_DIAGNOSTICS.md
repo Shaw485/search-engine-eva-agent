@@ -55,6 +55,20 @@ metric was used, so this is not evidence of 40 confirmed search defects. Local
 durations are intentionally not recorded as a performance benchmark because
 they depend on filesystem and SQLite cache state.
 
+After the killable-worker implementation was committed, clean revision
+`b7efb90ebf834533eec1c8fbdafc2ad48182df55` ran the same fixed workflow on
+2026-08-29. It completed 59/59 calls and produced:
+
+- Query set `query-set-33b9564cb660`;
+- diagnostic `bad-case-3b5d1ff13a7c` with 40 behavior candidates;
+- execution `bad-case-execution-a75b7a045ab943e8bceedfe102870d47`;
+- supervisor receipt `bad-case-supervisor-execution-750f5910a53e` under policy
+  `posix-process-group-deadline-v1` with a 125-second deadline.
+
+This second evidence set differs in content identity because executor revision
+is part of the trusted evidence. It confirms the new execution boundary, not a
+new search-quality result.
+
 ## Completion and evidence
 
 Before the first search, all 59 Query strings must satisfy the catalog contract

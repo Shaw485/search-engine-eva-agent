@@ -12,6 +12,19 @@ The Oracle is a mechanism-smoke evidence source. It never creates product-level
 relevance labels, computes nDCG/MRR, identifies a pipeline root cause, writes a
 strategy, activates search configuration or unlocks the dev/frozen-test sets.
 
+## Latest clean-revision construction
+
+From clean revision `b7efb90ebf834533eec1c8fbdafc2ad48182df55`, the validated
+pair `bad-case-3b5d1ff13a7c` + `query-set-33b9564cb660` reconstructs
+`oracle-batch-4b2533c217d3`: 20 clusters, 40 behavior candidates and 30
+synthetic intent tasks. The same evidence routes to
+`diagnostic-experiment-plan-bae9602ea206`, targeting the 10 identity
+zero-result cases with `zero-result-drop-one-token-backoff-v1`.
+
+These IDs prove deterministic construction only. No Owner judgment was written,
+the experiment strategy was not executed, and both
+`quality_conclusion_allowed` and `activation_eligible` remain false.
+
 ## Fixed census
 
 One batch is rebuilt from a content-addressed Bad Case diagnostic and its exact
