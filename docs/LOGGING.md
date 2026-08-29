@@ -245,9 +245,24 @@ and `stage_diagnosis_failed`; `retrieval_analysis` emits
 durably published. These use only content-addressed evidence IDs,
 category/count summaries and stable outcomes. Completion events also report
 only the number of changed Query examples split into improvement and regression;
-the protected workbench examples themselves remain private evidence. None logs raw Query text,
-product identifiers, titles, labels,
+the public response may display bounded examples from the committed public ESCI
+smoke fixture, but those examples never enter diagnostics. The API module emits
+`public_retrieval_analysis_cache_miss`,
+`public_retrieval_analysis_cache_hit`,
+`public_retrieval_analysis_cache_hit_after_lock`,
+`public_retrieval_analysis_cached` and
+`public_retrieval_analysis_rejected_busy` with only the fixed profile. None logs
+raw Query text, product identifiers, titles, labels,
 ranked lists, filesystem paths or exception messages.
+
+At the proxy boundary, rejected public analysis requests are independently
+recorded in
+`/var/log/nginx/search-agent-public-analysis-rejection.log`. The JSON schema is
+limited to timestamp, request ID, source IP, status, method, exact URI and
+duration. Request bodies, arguments, credentials, cookies, Owner identity and
+response content are excluded. Successful calls are not written to that file.
+Production rotation reuses the host `/etc/logrotate.d/nginx` wildcard; verify
+coverage with `logrotate --debug` rather than adding a duplicate stanza.
 
 The corresponding JSON under `retrieval-runs/`, `stage-diagnoses/` and
 `retrieval-comparisons/` is private evidence, not a sanitized log. It may

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from apps.api import main as api
 from search_quality.agent.contracts import (
     AgentState,
     FinishDecision,
@@ -22,7 +23,7 @@ from search_quality.agent.retrieval_planner import (
     expected_retrieval_decision,
     validate_retrieval_plan_semantics,
 )
-from search_quality.agent.retrieval_runtime import _summarize_action
+from search_quality.agent.retrieval_runtime import _agent_run_summary, _summarize_action
 from search_quality.agent.retrieval_tools import (
     RETRIEVAL_TOOL_CAPABILITIES,
     RUN_CANDIDATE_TOOL,
@@ -222,6 +223,47 @@ def test_real_20_query_path_runs_all_bounded_candidates_and_builds_response(
         abs(item["coarse_ndcg@10_delta"]) > 1e-12
         for item in response["changed_query_examples"]
     )
+
+
+def test_public_analysis_projection_recursively_drops_unknown_fields(
+    real_retrieval_path: _RealPath,
+) -> None:
+    response = real_retrieval_path.tools.build_analysis_response(
+        real_retrieval_path.result
+    )
+    response["agent_run"] = _agent_run_summary(real_retrieval_path.trace)
+
+    # These dict-backed sections intentionally accept evolving internal evidence.
+    # The public projector must never inherit a newly-added field by accident.
+    response["diagnosis"]["unknown_nested"] = "internal diagnosis metadata"
+    response["diagnosis"]["findings"][0]["unknown_nested"] = "internal finding"
+    response["candidate_diagnosis"]["unknown_nested"] = "candidate metadata"
+    response["comparison"]["unknown_nested"] = "internal comparison metadata"
+    response["comparison"]["aggregate_deltas"]["fusion"]["ndcg@10"][
+        "unknown_nested"
+    ] = "internal metric metadata"
+    response["comparison"]["per_query"][0]["unknown_nested"] = "query metadata"
+    response["comparison"]["per_query"][0]["baseline_top_results"][0][
+        "unknown_nested"
+    ] = "result metadata"
+    response["experiments"][0]["unknown_nested"] = "experiment metadata"
+    response["proposal"]["unknown_nested"] = "proposal metadata"
+
+    projected = api._project_public_retrieval_analysis(response)
+    serialized = json.dumps(projected, ensure_ascii=False, sort_keys=True)
+
+    assert "unknown_nested" not in serialized
+    assert set(projected) == set(api._PUBLIC_RETRIEVAL_TOP_LEVEL_FIELDS)
+    assert set(projected).isdisjoint(
+        {"aggregate", "candidate_aggregate", "evaluation_boundary", "pipeline"}
+    )
+    assert set(projected["diagnosis"]) == {"diagnosis_id", "findings"}
+    assert set(projected["diagnosis"]["findings"][0]) == {
+        "impact",
+        "impact_aggregation",
+        "stage_dropped_relevant_count",
+        "subtype",
+    }
 
 
 def test_real_path_persists_only_content_addressed_evidence(

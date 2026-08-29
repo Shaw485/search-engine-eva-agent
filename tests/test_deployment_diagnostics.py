@@ -1,16 +1,25 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 
 
 def _nginx_location(config: str, location: str) -> str:
-    pattern = rf"location\s+{re.escape(location)}\s*\{{(?P<body>.*?)\n\}}"
-    match = re.search(pattern, config, flags=re.DOTALL)
-    assert match is not None, f"missing nginx location: {location}"
-    return match.group("body")
+    marker = f"location {location} "
+    start = config.find(marker)
+    assert start >= 0, f"missing nginx location: {location}"
+    opening = config.find("{", start + len(marker))
+    assert opening >= 0, f"missing nginx body: {location}"
+    depth = 0
+    for index in range(opening, len(config)):
+        if config[index] == "{":
+            depth += 1
+        elif config[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return config[opening + 1 : index]
+    raise AssertionError(f"unterminated nginx location: {location}")
 
 
 def _assert_owner_rate_limit(location: str, *, login_probe: bool = False) -> None:
@@ -21,6 +30,21 @@ def _assert_owner_rate_limit(location: str, *, login_probe: bool = False) -> Non
     assert (
         "access_log /var/log/nginx/search-agent-auth-rate-limit.log "
         "search_agent_auth_limit if=$search_agent_auth_rate_limited;"
+    ) in location
+
+
+def _assert_public_analysis_limits(location: str) -> None:
+    assert "limit_req zone=search_agent_public_analysis burst=1 nodelay;" in location
+    assert "limit_conn search_agent_public_analysis_concurrency 1;" in location
+    assert "limit_req_status 429;" in location
+    assert "limit_conn_status 429;" in location
+    assert "client_max_body_size 1k;" in location
+    assert "limit_except POST" in location
+    assert "deny all;" in location
+    assert (
+        "access_log /var/log/nginx/search-agent-public-analysis-rejection.log "
+        "search_agent_public_analysis_rejection "
+        "if=$search_agent_public_analysis_rejected;"
     ) in location
 
 
@@ -45,9 +69,7 @@ def test_proxy_disables_request_line_access_log() -> None:
     assert "proxy_pass" not in decision
 
 
-def test_agent_login_shell_is_public_but_auth_probe_and_analysis_are_owner_only() -> (
-    None
-):
+def test_analysis_is_public_but_all_other_agent_compute_remains_owner_only() -> None:
     nginx = (ROOT / "deploy/nginx-search-eval.conf").read_text(encoding="utf-8")
     agent_page = _nginx_location(nginx, "= /search-agent.html")
     auth_check = _nginx_location(nginx, "= /search-agent-auth-check.json")
@@ -95,13 +117,14 @@ def test_agent_login_shell_is_public_but_auth_probe_and_analysis_are_owner_only(
     assert "error_page 401 =403 /__search-agent-auth-failed;" in proposal
     assert 'add_header Cache-Control "no-store" always;' in proposal
 
-    assert 'auth_basic "Search Agent Owner";' in retrieval
-    _assert_owner_rate_limit(retrieval)
-    assert "error_log /var/log/nginx/search-agent-auth-critical.log crit;" in retrieval
-    assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in retrieval
+    assert "auth_basic off;" in retrieval
+    assert "auth_basic_user_file" not in retrieval
+    assert "error_page 401" not in retrieval
+    _assert_public_analysis_limits(retrieval)
     assert "proxy_pass http://127.0.0.1:8010/agent/retrieval/analyze;" in retrieval
     assert 'proxy_set_header Authorization "";' in retrieval
-    assert "error_page 401 =403 /__search-agent-auth-failed;" in retrieval
+    assert 'proxy_set_header Cookie "";' in retrieval
+    assert 'proxy_set_header X-Search-Owner-Principal "";' in retrieval
     assert 'add_header Cache-Control "no-store" always;' in retrieval
     assert "proxy_read_timeout 130s;" in retrieval
 
@@ -191,9 +214,9 @@ def test_human_oracle_routes_are_exact_owner_only_and_strip_credentials() -> Non
 
 
 def test_owner_auth_rate_limits_and_safe_rejection_log_are_http_scoped() -> None:
-    http_config = (
-        ROOT / "deploy/nginx-search-agent-rate-limit-http.conf"
-    ).read_text(encoding="utf-8")
+    http_config = (ROOT / "deploy/nginx-search-agent-rate-limit-http.conf").read_text(
+        encoding="utf-8"
+    )
     deployment = (ROOT / "docs/DEPLOYMENT.md").read_text(encoding="utf-8")
 
     assert (
@@ -204,8 +227,21 @@ def test_owner_auth_rate_limits_and_safe_rejection_log_are_http_scoped() -> None
         "limit_req_zone $binary_remote_addr "
         "zone=search_agent_owner_api:10m rate=30r/m;" in http_config
     )
+    assert (
+        "limit_req_zone $binary_remote_addr "
+        "zone=search_agent_public_analysis:10m rate=2r/m;" in http_config
+    )
+    assert (
+        "limit_conn_zone $server_name "
+        "zone=search_agent_public_analysis_concurrency:1m;" in http_config
+    )
     assert "map $status $search_agent_auth_rate_limited" in http_config
+    assert "map $status $search_agent_public_analysis_rejected" in http_config
+    assert "~^(400|403|405|409|413|422|429|500|503)$ 1;" in http_config
     assert "log_format search_agent_auth_limit escape=json" in http_config
+    assert (
+        "log_format search_agent_public_analysis_rejection escape=json" in http_config
+    )
     for forbidden in ("$remote_user", "$http_authorization", "$request_body", "$args"):
         assert forbidden not in http_config
     for safe_field in (
@@ -218,9 +254,26 @@ def test_owner_auth_rate_limits_and_safe_rejection_log_are_http_scoped() -> None
     ):
         assert safe_field in http_config
     assert "/var/log/nginx/search-agent-auth-rate-limit.log" in deployment
+    assert "/var/log/nginx/search-agent-public-analysis-rejection.log" in deployment
     assert "/etc/logrotate.d/nginx" in deployment
     assert "duplicate log entry" in deployment
     assert "logrotate --debug /etc/logrotate.conf" in deployment
+
+
+def test_normal_release_installs_http_zones_before_server_locations_and_reload() -> (
+    None
+):
+    deployment = (ROOT / "docs/DEPLOYMENT.md").read_text(encoding="utf-8")
+    normal_release = deployment.split("Normal releases", maxsplit=1)[1]
+
+    rate_config = normal_release.index("/etc/nginx/conf.d/search-agent-rate-limit.conf")
+    exact_locations = normal_release.index(
+        "synchronize every exact `location = ...` block"
+    )
+    validate = normal_release.index("sudo nginx -t", exact_locations)
+    reload_nginx = normal_release.index("sudo systemctl reload nginx", validate)
+
+    assert rate_config < exact_locations < validate < reload_nginx
 
 
 def test_public_strategy_catalog_is_exact_and_unknown_agent_routes_fail_closed() -> (
