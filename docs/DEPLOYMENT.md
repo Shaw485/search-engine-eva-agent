@@ -61,9 +61,14 @@ sudo install -d -o www-data -g www-data -m 0750 /var/lib/search-engine-eva-agent
 test -z "$(sudo git -C /var/www/search-engine-eva-agent status --porcelain)"
 code_revision="$(sudo git -C /var/www/search-engine-eva-agent rev-parse HEAD)"
 printf '%s\n' "$code_revision" | grep -Eq '^[0-9a-f]{40}$'
-printf 'SEARCH_CODE_REVISION=%s\n' "$code_revision" | sudo tee /etc/search-engine-eva-agent.env >/dev/null
-sudo chown root:root /etc/search-engine-eva-agent.env
-sudo chmod 0600 /etc/search-engine-eva-agent.env
+printf 'SEARCH_CODE_REVISION=%s\n' "$code_revision" | sudo tee /etc/search-engine-eva-agent-revision.env >/dev/null
+oracle_actor_hmac_key="$(openssl rand -hex 32)"
+oracle_owner_principal=shaw
+oracle_owner_hmac_sha256="$(printf '%s' "$oracle_owner_principal" | openssl dgst -sha256 -hmac "$oracle_actor_hmac_key" -r | awk '{print $1}')"
+printf 'SEARCH_HUMAN_ORACLE_ALLOWED_ORIGIN=https://shawspace.cn\nSEARCH_HUMAN_ORACLE_ACTOR_HMAC_KEY=%s\nSEARCH_HUMAN_ORACLE_ACTOR_HMAC_KEY_ID=owner-basic-auth-v1\nSEARCH_HUMAN_ORACLE_OWNER_HMAC_SHA256=%s\n' "$oracle_actor_hmac_key" "$oracle_owner_hmac_sha256" | sudo tee /etc/search-engine-eva-agent.env >/dev/null
+unset oracle_actor_hmac_key oracle_owner_hmac_sha256 oracle_owner_principal
+sudo chown root:root /etc/search-engine-eva-agent.env /etc/search-engine-eva-agent-revision.env
+sudo chmod 0600 /etc/search-engine-eva-agent.env /etc/search-engine-eva-agent-revision.env
 sudo cp /var/www/search-engine-eva-agent/deploy/search-engine-eva-agent.service /etc/systemd/system/
 sudo systemctl daemon-reload
 ```
@@ -82,9 +87,9 @@ sudo systemctl reload nginx
 ```
 
 Only `/search-agent.html`, the proposal endpoint, the stage-aware
-`/agent/retrieval/analyze` endpoint, Agent Eval, the Query constructor and the
-59-Query Bad Case endpoint
-require this credential. The search
+`/agent/retrieval/analyze` endpoint, Agent Eval, the Query constructor, the
+59-Query Bad Case endpoint, the diagnostic experiment planner and all seven
+Human Diagnostic Oracle endpoints require this credential. The search
 experience, strategy page, catalog search and approved strategy catalog stay
 public. The exact decision location deliberately returns 404 even with
 credentials; human decisions are owner-only and must use the loopback API.
@@ -93,11 +98,14 @@ Runtime policy allows at most 120 seconds. This is a synchronous smoke-only
 bridge; before larger data or concurrent use, replace it with a queued worker,
 pollable task status and force-terminable job deadline rather than extending the
 HTTP timeout again.
-Agent Eval and Bad Case diagnostics use the same 130-second proxy timeout;
-the Query constructor uses 15 seconds. All exact owner routes clear the Nginx
-Basic Auth header before proxying and disable request access logs. The Bad Case
-route additionally sends `Cache-Control: no-store` because its successful
-response contains a strictly limited raw Query/product display sample.
+Agent Eval uses the same 130-second proxy timeout. Bad Case diagnostics uses
+140 seconds for its 125-second process-group deadline plus bounded TERM/KILL
+grace and HTTP overhead. Human Oracle behavior view uses 40 seconds because the
+server replays and verifies one complete cluster; the Query constructor,
+diagnostic planner and other Oracle routes use 15 seconds. All exact owner
+routes clear the Nginx Basic Auth header, disable request access logs and send
+`Cache-Control: no-store`. Oracle routes also overwrite the internal principal
+header from Nginx authentication; the browser cannot choose its actor identity.
 The Agent Eval runner refuses new work after its private artifact tree exceeds
 2 GiB. Monitor `/var/lib/search-engine-eva-agent/runtime/agent-evals/`; archive
 old execution receipts and Traces according to the host retention policy while
@@ -106,6 +114,19 @@ Bad Case artifacts use a separate 256 MiB tree watermark plus a 2 GiB free-space
 preflight. Monitor
 `/var/lib/search-engine-eva-agent/runtime/bad-case-diagnostics/`; failed
 capacity preflight does not write another attempt receipt.
+Human Oracle artifacts use a separate 64 MiB tree watermark. Monitor
+`/var/lib/search-engine-eva-agent/runtime/human-oracle/`; keep this directory
+private because it is the append-only audit record for Owner judgments, even
+though raw Query and product content are excluded.
+
+The Oracle actor HMAC key, key ID and allowlisted Owner HMAC in
+`/etc/search-engine-eva-agent.env` are server-only identity material. Do not
+expose them to the browser, logs, Git or deployment output. The allowlist digest
+must be derived from the exact Basic Auth username Nginx places in
+`$remote_user`; a second valid htpasswd user is still denied by the application.
+Changing the key, key ID or allowlist changes the pseudonymous actor identity,
+so do not rotate them while a review batch is open. The allowed origin must
+exactly match the HTTPS site origin.
 
 ## Install or replace the index
 
@@ -128,14 +149,37 @@ the previous index can be reinstalled if verification fails.
 
 ## Update and verify
 
+Before the first update from a pre-Oracle installation, migrate the old
+revision-only environment file exactly once. This generates a persistent actor
+key; do not repeat this block for normal releases or while a review batch is
+open:
+
+```bash
+oracle_actor_hmac_key="$(openssl rand -hex 32)"
+oracle_owner_principal=shaw
+oracle_owner_hmac_sha256="$(printf '%s' "$oracle_owner_principal" | openssl dgst -sha256 -hmac "$oracle_actor_hmac_key" -r | awk '{print $1}')"
+printf 'SEARCH_HUMAN_ORACLE_ALLOWED_ORIGIN=https://shawspace.cn\nSEARCH_HUMAN_ORACLE_ACTOR_HMAC_KEY=%s\nSEARCH_HUMAN_ORACLE_ACTOR_HMAC_KEY_ID=owner-basic-auth-v1\nSEARCH_HUMAN_ORACLE_OWNER_HMAC_SHA256=%s\n' "$oracle_actor_hmac_key" "$oracle_owner_hmac_sha256" | sudo tee /etc/search-engine-eva-agent.env >/dev/null
+unset oracle_actor_hmac_key oracle_owner_hmac_sha256 oracle_owner_principal
+sudo chown root:root /etc/search-engine-eva-agent.env
+sudo chmod 0600 /etc/search-engine-eva-agent.env
+```
+
+Normal releases update only the separate code-revision file and preserve the
+Oracle identity material:
+
 ```bash
 sudo git -C /var/www/search-engine-eva-agent pull --ff-only
 test -z "$(sudo git -C /var/www/search-engine-eva-agent status --porcelain)"
 code_revision="$(sudo git -C /var/www/search-engine-eva-agent rev-parse HEAD)"
 printf '%s\n' "$code_revision" | grep -Eq '^[0-9a-f]{40}$'
-printf 'SEARCH_CODE_REVISION=%s\n' "$code_revision" | sudo tee /etc/search-engine-eva-agent.env >/dev/null
-sudo chown root:root /etc/search-engine-eva-agent.env
-sudo chmod 0600 /etc/search-engine-eva-agent.env
+printf 'SEARCH_CODE_REVISION=%s\n' "$code_revision" | sudo tee /etc/search-engine-eva-agent-revision.env >/dev/null
+sudo chown root:root /etc/search-engine-eva-agent-revision.env
+sudo chmod 0600 /etc/search-engine-eva-agent-revision.env
+sudo test -s /etc/search-engine-eva-agent.env
+sudo grep -Eq '^SEARCH_HUMAN_ORACLE_ALLOWED_ORIGIN=https://shawspace\.cn$' /etc/search-engine-eva-agent.env
+sudo grep -Eq '^SEARCH_HUMAN_ORACLE_ACTOR_HMAC_KEY=[0-9a-f]{64}$' /etc/search-engine-eva-agent.env
+sudo grep -Eq '^SEARCH_HUMAN_ORACLE_ACTOR_HMAC_KEY_ID=[a-z][a-z0-9-]{0,63}$' /etc/search-engine-eva-agent.env
+sudo grep -Eq '^SEARCH_HUMAN_ORACLE_OWNER_HMAC_SHA256=[0-9a-f]{64}$' /etc/search-engine-eva-agent.env
 sudo install -d -o www-data -g www-data -m 0750 /var/lib/search-engine-eva-agent/runtime
 sudo /var/www/search-engine-eva-agent/.venv/bin/pip install --no-build-isolation --no-deps -e /var/www/search-engine-eva-agent
 sudo install -o root -g root -m 0644 \
@@ -194,6 +238,23 @@ curl --user shaw --request POST \
   'https://shawspace.cn/search-eval-api/agent/bad-cases/run' \
   --header 'Content-Type: application/json' \
   --data '{"source":"smoke"}'
+curl --output /dev/null --write-out '%{http_code}\n' \
+  --request POST \
+  'https://shawspace.cn/search-eval-api/agent/diagnostic-experiments/plan' \
+  --header 'Content-Type: application/json' \
+  --data '{"diagnostic_id":"bad-case-000000000000","query_set_id":"query-set-000000000000"}'
+curl --output /dev/null --write-out '%{http_code}\n' \
+  --request POST \
+  'https://shawspace.cn/search-eval-api/agent/human-oracle/batches/status' \
+  --header 'Content-Type: application/json' \
+  --data '{"oracle_batch_id":"oracle-batch-000000000000"}'
+# Replace the IDs below with IDs returned by the authenticated Bad Case run.
+curl --user shaw --request POST \
+  'https://shawspace.cn/search-eval-api/agent/human-oracle/batches/create' \
+  --header 'Content-Type: application/json' \
+  --header 'Origin: https://shawspace.cn' \
+  --header 'Sec-Fetch-Site: same-origin' \
+  --data '{"diagnostic_id":"bad-case-REPLACE_ME","query_set_id":"query-set-REPLACE_ME"}'
 curl 'https://shawspace.cn/search-eval-api/agent/strategy/catalog'
 curl --output /dev/null --write-out '%{http_code}\n' \
   --request POST 'https://shawspace.cn/search-eval-api/agent/strategy/decision' \
@@ -208,15 +269,20 @@ Acceptance requires:
 
 1. Health reports `catalog.status=ready`, the expected index ID and 1,814,924 products.
 2. English, Spanish, Japanese and exact product-ID checks return valid JSON.
-3. Anonymous requests to the Agent page, proposal endpoint and stage-aware
-   retrieval/Bad Case endpoints return `401`; authenticated proposal requests return a
+3. Anonymous requests to the Agent page, proposal endpoint, stage-aware
+   retrieval/Bad Case, diagnostic-plan and Human Oracle endpoints return `401`;
+   authenticated proposal requests return a
    pending proposal with baseline Run ID, candidate Run ID, comparison ID,
    aggregate metric deltas and bad-case examples. An authenticated retrieval
    analysis returns all three bounded candidate outcomes, stage metrics, 12 gate
    checks and representative product evidence. A successful Bad Case response
    reports exactly 59 calls, zero operational failures, no quality metrics or
-   strategy writes, and no more than 12 evidence-linked display samples. Search and strategy pages remain
-   anonymously accessible.
+   strategy writes, no more than 12 evidence-linked display samples, and a
+   validated supervisor receipt containing the 125-second deadline policy and
+   TERM/KILL grace. An authenticated, exact-origin Oracle create request returns
+   20 clusters/40 candidates/30 intent tasks; missing origin, cross-site or
+   non-JSON requests fail closed. Search and strategy pages remain anonymously
+   accessible.
 4. The strategy catalog endpoint returns the current approved runtime strategy
    list. It can be empty before the Owner approves a proposal.
 5. The public decision check returns `404`; only a deliberate loopback request
@@ -246,6 +312,17 @@ only hashes and aggregate behavior; execution and failed-attempt receipts store
 only IDs, counts, stages and timing. The source Query-set artifact remains
 private because it contains raw Query text. The owner-only HTTP display sample
 is not a durable evidence artifact and must not be cached or copied into logs.
+The parent supervisor writes a separate immutable receipt under
+`bad-case-diagnostics/supervisor-executions/`; only that receipt can prove that
+the child completed before the hard deadline.
+
+Human Oracle batches, append-only annotations and seals under `human-oracle/`
+store hashes, constrained judgments and pseudonymous actor IDs, but no raw
+Query, title, product ID or result list. Transient intent and behavior views
+contain Owner-visible evidence and must never be copied into browser storage,
+analytics, access logs or exports. A sealed Oracle is diagnostic evidence only:
+it creates no product relevance labels, quality conclusion, root-cause claim or
+strategy write.
 
 To record an intentional human decision, sign in to the server and call
 `http://127.0.0.1:8010/agent/strategy/decision` directly with the reviewed

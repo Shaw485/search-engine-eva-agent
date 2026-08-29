@@ -207,11 +207,32 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
 - 具体例子：原 Query 有 10 个结果、相邻字母调换后为 0，只能记录
   `zero_result + spelling_sensitive`。下一步应由人工 Oracle 或带独立标签的
   Search Evaluation Harness 判断纠错候选是否真正提升 nDCG/MRR。
-- 当前工程边界：SQLite progress handler 能中断超时 SQL，跨进程 `flock` 能
-  防止重复运行，但这仍不是可强杀的 worker deadline；单阶段 catalog 也看不到
-  recall、fusion、coarse-rank 的 stage drop。
+- 当前工程边界：外层 POSIX 进程组现在能执行 125 秒 hard deadline 和
+  TERM/KILL/reap，并用独立 supervisor receipt 证明本次执行经过该边界；这解决
+  的是卡死与资源回收，不是搜索质量。单阶段 catalog 仍看不到 recall、fusion、
+  coarse-rank 的 stage drop。
 - 验证证据：`docs/BAD_CASE_DIAGNOSTICS.md`。Owner 的“执行”是实施授权，不是
   独立理解证据；500-Query dev 与 frozen test 继续锁定。
+- 状态：**Explanation delivered; independent verification pending**
+
+## 当前插入知识：行为恢复与质量提升必须分轨
+
+【必学知识提醒】
+
+- 当前知识：把零结果 Query 变成有结果属于可观测行为变化；只有新增候选经过
+  独立相关性标注并由 Search Harness 复算指标，才能声称搜索质量提升。
+- 为什么现在必须理解：本阶段 Agent 会自动选择首个 AND 回退实验。如果直接
+  把“恢复了几个 Query”当成 nDCG/MRR 提升，Agent 就同时提出方案、制造结果和
+  判自己成功，证据会循环自证。
+- 最低掌握范围：能区分 59-case behavioral lane、20-Query development smoke
+  quality lane 和独立 held-out Oracle；能说明 40 个候选来自 20 个来源簇，网页
+  最多 12 个展示样本不是黄金评测集。
+- 具体例子：严格 AND 的 `wireless gaming mouse` 为零时，drop-one fallback
+  可能召回只包含 `wireless mouse` 的商品。这证明系统不再返回空页，但不能证明
+  用户想要的 `gaming` 属性仍被满足；必须标注新增商品后再看 nDCG/MRR。
+- 验证证据：2026-08-29 已在实施前随进度说明；ADR 007 固化了双证据轨和
+  Human Diagnostic Oracle 边界。Owner 本轮“执行”是实现授权，不是独立掌握
+  证据，也不解锁 dev/test 或策略激活。
 - 状态：**Explanation delivered; independent verification pending**
 
 ## 检查点记录

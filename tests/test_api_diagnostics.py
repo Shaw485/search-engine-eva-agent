@@ -386,22 +386,38 @@ def test_bad_case_endpoint_runs_fixed_batch_and_returns_limited_samples(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     expected = _fake_bad_case_run()
-    service = object()
 
     def run(**kwargs):
-        assert kwargs == {
-            "project_root": api.PROJECT_ROOT,
-            "artifact_root": None,
-            "source_profile": "smoke",
-            "revision_provider": api._api_code_revision,
-            "search_service": service,
-        }
+        assert kwargs["project_root"] == api.PROJECT_ROOT
+        assert kwargs["artifact_root"] is None
+        assert kwargs["catalog_index_path"] == "trusted-index"
+        assert kwargs["executor_revision"] == "a" * 40
+        assert kwargs["source_profile"] == "smoke"
+        assert kwargs["deadline_ms"] == 125_000
+        assert isinstance(kwargs["trace_id"], str)
         return expected
 
     monkeypatch.setattr(api, "_agent_artifact_root", lambda: None)
     monkeypatch.setattr(api, "_catalog_index_path", lambda: "trusted-index")
-    monkeypatch.setattr(api, "CatalogSearchService", lambda path: service)
-    monkeypatch.setattr(api, "run_bad_case_diagnostics", run)
+    monkeypatch.setattr(api, "_api_code_revision", lambda _root: "a" * 40)
+    monkeypatch.setattr(api, "supervise_bad_case_diagnostics", run)
+
+    def load_receipt(root, execution_id):
+        assert root == api.PROJECT_ROOT / "runs"
+        assert execution_id == "bad-case-execution-" + ("d" * 32)
+        return SimpleNamespace(
+            receipt_id="bad-case-supervisor-execution-eeeeeeeeeeee",
+            execution_id=execution_id,
+            diagnostic_id="bad-case-aaaaaaaaaaaa",
+            policy_id="posix-process-group-deadline-v1",
+            deadline_ms=125_000,
+            term_grace_ms=1_000,
+            kill_grace_ms=1_000,
+            completion_observation="worker_result",
+            completed=True,
+        )
+
+    monkeypatch.setattr(api, "load_supervisor_execution_receipt", load_receipt)
     response = api.agent_bad_cases_run(api.BadCaseRunRequest())
     validated = api.BadCaseRunResponse.model_validate(response, strict=True)
 
@@ -415,6 +431,14 @@ def test_bad_case_endpoint_runs_fixed_batch_and_returns_limited_samples(
     assert validated.relevance_labels_used is False
     assert validated.quality_metrics_computed is False
     assert validated.stage_drop_diagnostics_computed is False
+    assert validated.worker_hard_deadline_enforced is True
+    assert validated.worker_deadline_ms == 125_000
+    assert (
+        validated.supervisor_receipt_id == "bad-case-supervisor-execution-eeeeeeeeeeee"
+    )
+    assert validated.term_grace_ms == 1_000
+    assert validated.kill_grace_ms == 1_000
+    assert validated.completion_observation == "worker_result"
 
     contradictory = dict(response)
     contradictory["diagnostic_candidate_count"] = 3
@@ -432,6 +456,40 @@ def test_bad_case_endpoint_runs_fixed_batch_and_returns_limited_samples(
     }
     with pytest.raises(ValueError, match="unique"):
         api.BadCaseRunResponse.model_validate(duplicate, strict=True)
+
+
+def test_bad_case_endpoint_rejects_a_contradictory_supervisor_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = _fake_bad_case_run()
+    monkeypatch.setattr(api, "_agent_artifact_root", lambda: None)
+    monkeypatch.setattr(api, "_catalog_index_path", lambda: "trusted-index")
+    monkeypatch.setattr(api, "_api_code_revision", lambda _root: "a" * 40)
+    monkeypatch.setattr(
+        api, "supervise_bad_case_diagnostics", lambda **_kwargs: expected
+    )
+    monkeypatch.setattr(
+        api,
+        "load_supervisor_execution_receipt",
+        lambda _root, execution_id: SimpleNamespace(
+            receipt_id="bad-case-supervisor-execution-eeeeeeeeeeee",
+            execution_id=execution_id,
+            diagnostic_id="bad-case-ffffffffffff",
+            policy_id="posix-process-group-deadline-v1",
+            deadline_ms=125_000,
+            term_grace_ms=1_000,
+            kill_grace_ms=1_000,
+            completion_observation="worker_result",
+            completed=True,
+        ),
+    )
+
+    with logging_context(trace_id="bad-case-receipt-conflict"):
+        with pytest.raises(HTTPException) as captured:
+            api.agent_bad_cases_run(api.BadCaseRunRequest())
+
+    assert captured.value.status_code == 503
+    assert captured.value.detail["code"] == "bad_case_run_unavailable"
 
 
 def test_bad_case_endpoint_rejects_concurrent_run() -> None:
@@ -459,8 +517,8 @@ def test_bad_case_failure_is_safe_and_omits_query_and_title(
         raise ValueError("private Query and private product title")
 
     monkeypatch.setattr(api, "_catalog_index_path", lambda: "trusted-index")
-    monkeypatch.setattr(api, "CatalogSearchService", lambda path: object())
-    monkeypatch.setattr(api, "run_bad_case_diagnostics", fail)
+    monkeypatch.setattr(api, "_api_code_revision", lambda _root: "a" * 40)
+    monkeypatch.setattr(api, "supervise_bad_case_diagnostics", fail)
     with logging_context(trace_id="bad-case-api-safe"):
         with pytest.raises(HTTPException) as captured:
             api.agent_bad_cases_run(api.BadCaseRunRequest())
@@ -473,6 +531,114 @@ def test_bad_case_failure_is_safe_and_omits_query_and_title(
     assert "private Query" not in stream.getvalue()
     assert "private product title" not in stream.getvalue()
     assert "bad_case_run_failed" in stream.getvalue()
+
+
+def test_bad_case_worker_deadline_returns_504_with_execution_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    execution_id = "bad-case-execution-" + ("e" * 32)
+
+    def timeout(**_kwargs):
+        raise api.BadCaseWorkerDeadlineExceeded(
+            "private worker detail",
+            execution_id=execution_id,
+            error_code="worker_deadline_exceeded",
+        )
+
+    monkeypatch.setattr(api, "_catalog_index_path", lambda: "trusted-index")
+    monkeypatch.setattr(api, "_api_code_revision", lambda _root: "a" * 40)
+    monkeypatch.setattr(api, "supervise_bad_case_diagnostics", timeout)
+    with logging_context(trace_id="bad-case-deadline-safe"):
+        with pytest.raises(HTTPException) as captured:
+            api.agent_bad_cases_run(api.BadCaseRunRequest())
+
+    assert captured.value.status_code == 504
+    assert captured.value.detail == {
+        "code": "bad_case_worker_deadline_exceeded",
+        "message": "Bad Case diagnostics exceeded the worker deadline",
+        "trace_id": "bad-case-deadline-safe",
+        "execution_id": execution_id,
+    }
+
+
+def test_diagnostic_experiment_plan_loads_only_the_requested_evidence_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = object()
+    plan = object()
+
+    def load(**kwargs):
+        assert kwargs == {
+            "artifact_root": api.PROJECT_ROOT / "runs",
+            "diagnostic_id": "bad-case-aaaaaaaaaaaa",
+            "query_set_id": "query-set-bbbbbbbbbbbb",
+        }
+        return evidence
+
+    def route(actual):
+        assert actual is evidence
+        return plan
+
+    monkeypatch.setattr(api, "_agent_artifact_root", lambda: None)
+    monkeypatch.setattr(api, "load_resolved_diagnostic_evidence", load)
+    monkeypatch.setattr(api, "route_diagnostic_evidence", route)
+
+    response = api.agent_diagnostic_experiment_plan(
+        api.DiagnosticExperimentPlanRequest(
+            diagnostic_id="bad-case-aaaaaaaaaaaa",
+            query_set_id="query-set-bbbbbbbbbbbb",
+        )
+    )
+    assert response is plan
+
+
+def test_diagnostic_experiment_route_has_strict_contracts() -> None:
+    route = next(
+        item
+        for item in api.app.routes
+        if getattr(item, "path", None) == "/agent/diagnostic-experiments/plan"
+    )
+    assert route.response_model is api.DiagnosticExperimentPlan
+    assert api.DiagnosticExperimentPlanRequest.model_config["extra"] == "forbid"
+    with pytest.raises(ValueError):
+        api.DiagnosticExperimentPlanRequest(
+            diagnostic_id="bad-case-aaaaaaaaaaaa",
+            query_set_id="query-set-bbbbbbbbbbbb",
+            artifact_path="/private/run.json",
+        )
+
+
+def test_diagnostic_experiment_plan_failure_is_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream = io.StringIO()
+    configure_logging(
+        default_level="OFF",
+        module_levels={"api": "INFO"},
+        stream=stream,
+    )
+
+    def fail(**_kwargs):
+        raise ValueError("private Query and /private/evidence/path")
+
+    monkeypatch.setattr(api, "load_resolved_diagnostic_evidence", fail)
+    with logging_context(trace_id="diagnostic-plan-api-safe"):
+        with pytest.raises(HTTPException) as captured:
+            api.agent_diagnostic_experiment_plan(
+                api.DiagnosticExperimentPlanRequest(
+                    diagnostic_id="bad-case-aaaaaaaaaaaa",
+                    query_set_id="query-set-bbbbbbbbbbbb",
+                )
+            )
+    assert captured.value.status_code == 409
+    assert captured.value.detail == {
+        "code": "diagnostic_evidence_unavailable",
+        "message": "Diagnostic evidence is unavailable or stale",
+        "trace_id": "diagnostic-plan-api-safe",
+    }
+    assert "private Query" not in stream.getvalue()
+    assert "/private/evidence/path" not in stream.getvalue()
+    assert "diagnostic_experiment_plan_failed" in stream.getvalue()
 
 
 def test_new_agent_tool_requests_forbid_overrides() -> None:

@@ -5,9 +5,9 @@
 > 更新日期：2026-08-29
 >
 > 当前状态：全量商品网站基线已部署；query-scoped 阶段检索已接入
-> Runtime/Trace/Replay 并完成本地网页时间线；exact-boost 仍是独立控制器，
-> Stage 5 第一版 12 任务 Agent Eval 与 smoke-only Query 构造器已完成本地
-> 实现，新增工作台入口尚未部署；Owner 体验与阶段 2 评测内核继续进行
+> Runtime/Trace/Replay。59-Query Bad Case 已迁入可强杀 worker，完整 20 簇
+> Human Diagnostic Oracle、首个零结果回退实验计划和本地工作台均已实现，
+> 尚未部署、尚未产生 Owner 判断，也没有批准或激活任何搜索策略
 >
 > 使用方式：一次只跨越一个验收门槛；Agent 的任何结论必须能够回到确定性实验结果。
 
@@ -117,11 +117,11 @@ Owner 决定先在现有 `shawspace.cn` 搜索体验页搜索全部 1,814,924 �
 | 1. ESCI 数据与实验边界 | 可复现 train/dev/test、Manifest、数据报告 | 给 Agent 提供可信数据边界 | **Technical gate passed; learning check pending** |
 | 2. Search Evaluation Harness | 指标、BM25 基线、Run 与对比报告 | Agent 可依赖的确定性工具层 | **In Progress** |
 | 3. 最小搜索评测 Agent | 首个计划—工具—观察—报告闭环 | 第一次可见的真实 Agent 行为 | **In Progress: stage-aware deterministic path integrated** |
-| 4. Agent Runtime Harness | 状态机、权限、预算、Trace、Replay | Agent 可控、可恢复、可复现 | **In Progress: local retrieval Trace/Replay integrated** |
+| 4. Agent Runtime Harness | 状态机、权限、预算、Trace、Replay | Agent 可控、可恢复、可复现 | **In Progress: local Trace/Replay + killable diagnostic worker** |
 | 5. Agent Evaluation Harness | 黄金任务集和 Agent 成绩单 | 证明 Agent 不是偶然成功 | **In Progress: fixed 12-task v1 passes locally** |
 | 6. 搜索策略与诊断实验室 | Multi-field BM25、Vector、Hybrid、Rerank、Bad Case | Agent 获得更多可组合实验工具 | **In Progress: query-scoped multi-recall + RRF + coarse-rank slice** |
-| 7. 诊断与优化 Agent | 自动发现 Bad Case、提出策略、运行受控实验并请求审批 | 完整的搜索评测与优化 Agent | **In Progress: stage-aware Runtime path + separate exact-boost controller** |
-| 8. Web Agent 工作台与交付 | Agent 工作台、审批面板、搜索对比页、部署与作品集 | 用户可观察计划、工具、证据、Replay 和策略审批 | **In Progress: read-only Runtime Trace UI implemented locally, not deployed** |
+| 7. 诊断与优化 Agent | 自动发现 Bad Case、提出策略、运行受控实验并请求审批 | 完整的搜索评测与优化 Agent | **In Progress: diagnostic router + first behavior experiment plan; no activation** |
+| 8. Web Agent 工作台与交付 | Agent 工作台、审批面板、搜索对比页、部署与作品集 | 用户可观察计划、工具、证据、Replay 和策略审批 | **In Progress: Human Oracle review UI implemented locally, not deployed** |
 
 与 v0.1 相比，Agent MVP 从原阶段 5 前移到阶段 3；Trace、Replay 和 Agent Eval 也前移。向量与 Rerank 不再是 Agent 出现之前的前置条件。
 
@@ -271,8 +271,11 @@ retrieval 两类本地任务。阶段检索 Grounding 与 Replay 会重算观察
 下一动作，拒绝跳步、重排、门禁篡改和越权工具；工作台只展示经过 Replay
 验证的只读时间线。Trace 的无密钥 SHA-256 链用于发现损坏，不是数字签名；
 elapsed budget 只在本地动作之间协作检查，不能终止一个永不返回的外部调用。
-真实模型接入前必须补可强制终止的 worker deadline、模型/Prompt/Token/成本
-版本与更强来源认证。因此阶段 4 仍为进行中。
+Bad Case 路径现已迁入独立 POSIX 进程组，父进程用 monotonic 125 秒 hard
+deadline 执行 `SIGTERM → bounded grace → SIGKILL`，并写不可变 supervisor
+receipt；这解决了该工具的强制终止问题，但其他未来模型/网络工具仍需同等隔离。
+真实模型接入前还必须补模型/Prompt/Token/成本版本与更强来源认证。因此阶段 4
+仍为进行中。
 
 ### 阶段 5：Agent Evaluation Harness
 
@@ -324,7 +327,12 @@ Task Success、独立 evidence-ref Grounding、工具选择、恢复、预算、
 只读 immutable SQLite 连接执行 59 次 Top-10 搜索，归类零结果、拼写变换后
 结果变化、词序变换后结果变化和需要人工判断的排名输出变化。任一搜索失败都
 不发布 completed evidence；SQL 有 progress-handler deadline，artifact root 有
-跨进程锁。该工具不读取标签、不算质量指标、不写策略，也不能诊断 stage drop。
+跨进程锁，且现在由可终止进程组 worker 监督。该工具不读取标签、不算质量
+指标、不写策略，也不能诊断 stage drop。
+
+其后已实现完整 20 来源簇/40 行为候选的 Human Diagnostic Oracle：先对 30 个
+合成 Query 做盲化意图判断，再对 40 个候选查看服务端复核的 Top 3 证据；全部
+70 个判断完成后才可 seal。当前只有批次构造和本地接口验证，没有 Owner 判断。
 
 ### 阶段 6：搜索策略与 Bad Case 实验室
 
@@ -441,14 +449,19 @@ Agent 不可以：
 - 固定 59-Query 单阶段执行器已能产生可重放校验的行为诊断：确定性
   `diagnostic_id` 与动态 `execution_id` 分离，owner-only API 只返回最多 12 个
   受哈希证据约束的展示样本。它不把结果变化冒充相关性退化。
+- Bad Case 已迁入可强杀 worker；Human Oracle 的 20 簇、30 个盲化意图判断、
+  40 个行为判断、CAS/幂等/封存契约和 Owner-only 工作台已本地完成。
+- 诊断路由当前只提出 `zero-result-drop-one-token-backoff-v1`：仅原始 AND
+  零结果时回退，保护数字/型号词，最多 16 路并用 RRF 融合；这里只是实验计划。
 
 ### Next
 
-- 建立一小组人工复核的诊断 Oracle，并把 stage-aware retrieval 的
-  recall/fusion/coarse-rank 证据接入 Bad Case executor；当前单阶段 catalog
-  不能观察 stage drop。
-- 把同步执行迁入可强制终止的 worker deadline；跨进程运行锁与 SQLite SQL
-  中断已实现，但不能冒充通用进程强杀。保持 500-Query dev/frozen test 门禁。
+- 经 Owner 明确授权后部署工作台，然后由 Owner 完成固定 70 个 Oracle 判断并
+  seal；在此之前不能把 40 个候选称为 40 个已确认 Bad Case。
+- 让首个零结果回退策略在固定 behavior lane 真正运行，报告恢复数、fan-out、
+  延迟和失败；再建立独立商品相关性判断池，才进入 quality lane 和 Harness。
+- 把 stage-aware retrieval 的 recall/fusion/coarse-rank 证据接入 Bad Case
+  executor；当前单阶段 catalog 仍不能观察 stage drop。
 - 实现认证 Owner 审批、CSRF、审计身份、验证后生效和可验证回滚。
 - 将仍独立的 exact-boost 控制器迁入统一 Runtime 工具与 Trace 契约。
 
@@ -533,13 +546,13 @@ Agent 不可以：
 
 ## 10. 当前唯一下一步
 
-把现有单阶段、无标签的 59-Query 行为诊断升级成“可由独立 Oracle 检查的
-Bad Case 发现任务”：先人工复核一小组黄金案例，再接入 stage-aware retrieval
-证据以区分 recall、fusion 与 coarse-rank drop，并把同步执行迁入可强制终止的
-worker。当前已完成任务级失败分类、跨进程锁和 SQLite SQL deadline，但不能用
-它们冒充通用 worker 强杀，也不能把结果变化直接写成相关性退化。下一步仍不接
-真实模型、不批准策略、不修改 `/catalog/search`。
+在明确部署授权后，把已完成的 Owner-only Human Oracle 工作台发布到网站，由
+Owner 完成固定 30 个盲化意图判断和 40 个行为判断并 seal。随后让
+`zero-result-drop-one-token-backoff-v1` 在固定 behavior lane 运行，量化零结果
+恢复、查询 fan-out、延迟和失败；如果要声称质量提升，还必须另建固定的商品
+相关性判断池并交给 Search Harness。现阶段不能把行为恢复直接写成相关性提升，
+也不能批准策略或修改 `/catalog/search`。
 
-该工作仍不解锁 500-Query dev 或 frozen test。更大验证、模型 Planner、浏览器
+该工作仍不解锁 500-Query dev 或 frozen test。更大验证、模型 Planner、策略
 审批、全量 serving pipeline 和线上生效分别需要学习证据、安全机制与 Owner
 明确决策；“继续”不会自动跨越这些门禁。

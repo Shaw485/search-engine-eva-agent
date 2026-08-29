@@ -30,6 +30,10 @@ stderr. Normal CLI results remain on stdout.
 | `agent_eval` | Fixed Agent task suite, independent grading and artifact publication | `WARNING` |
 | `query_constructor` | Source-bounded Query construction and immutable storage | `WARNING` |
 | `bad_case` | Fixed 59-Query batch, evidence publication, rerun and failed attempts | `WARNING` |
+| `bad_case_supervisor` | Parent process-group deadline, termination and immutable supervisor receipt | `WARNING` |
+| `bad_case_worker` | Isolated child startup, fixed diagnostic execution and terminal envelope | `WARNING` |
+| `diagnostic_experiments` | Trusted diagnostic loading, evidence routing and bounded experiment planning | `WARNING` |
+| `human_oracle` | Owner-only diagnostic batch, blind intent review, behavior replay, CAS and seal | `WARNING` |
 | `retrieval` | Label-blind recall channels, fusion, stage retention and retrieval Runs | `WARNING` |
 | `stage_diagnosis` | Stage evidence validation and bottleneck diagnosis | `WARNING` |
 | `retrieval_analysis` | Bounded experiment orchestration and artifact publication | `WARNING` |
@@ -52,6 +56,10 @@ export SEARCH_LOG_LEVEL_AGENT_RUNTIME=DEBUG
 export SEARCH_LOG_LEVEL_AGENT_EVAL=INFO
 export SEARCH_LOG_LEVEL_QUERY_CONSTRUCTOR=INFO
 export SEARCH_LOG_LEVEL_BAD_CASE=INFO
+export SEARCH_LOG_LEVEL_BAD_CASE_SUPERVISOR=INFO
+export SEARCH_LOG_LEVEL_BAD_CASE_WORKER=INFO
+export SEARCH_LOG_LEVEL_DIAGNOSTIC_EXPERIMENTS=INFO
+export SEARCH_LOG_LEVEL_HUMAN_ORACLE=INFO
 export SEARCH_LOG_LEVEL_RETRIEVAL=DEBUG
 export SEARCH_LOG_LEVEL_RETRIEVAL_ANALYSIS=INFO
 export SEARCH_LOG_LEVEL_STAGE_DIAGNOSIS=INFO
@@ -106,6 +114,12 @@ JSON diagnostics separate from the normal result:
 .venv/bin/python -m search_quality.bad_cases.cli \
   --log-module bad_case=DEBUG \
   2>bad-case-debug.jsonl
+
+SEARCH_LOG_LEVEL=OFF \
+SEARCH_LOG_LEVEL_BAD_CASE_SUPERVISOR=DEBUG \
+SEARCH_LOG_LEVEL_BAD_CASE_WORKER=INFO \
+.venv/bin/python -m search_quality.bad_cases.cli \
+  2>bad-case-worker-debug.jsonl
 ```
 
 To isolate one subsystem, set the global level to `OFF` and enable only that
@@ -259,6 +273,31 @@ two modules at `INFO` in systemd while keeping per-Query ranking diagnostics
 off; journald provides the same centralized retention and rotation described
 below.
 
+The killable Bad Case boundary is split across `bad_case_supervisor` and
+`bad_case_worker`. The parent records dispatch, deadline/termination outcome and
+publication of the immutable supervisor receipt. The child records only its
+fixed startup and terminal state. Safe fields are execution/diagnostic/receipt
+IDs, policy, bounded counts, durations, signal names and stable error codes.
+Neither side logs environment values, filesystem paths, Query/product content,
+IPC payloads, exception messages or credentials. Enable the two modules
+independently to distinguish parent supervision faults from search execution
+faults.
+
+`diagnostic_experiments` records trusted artifact loading, evidence routing and
+query-route generation using only content IDs, allowlisted strategy IDs,
+aggregate counts and stable failures. It never logs Query routes, protected
+tokens, raw evidence bodies or product content. A generated plan is behavior
+evidence only: the module does not compute relevance metrics, write a strategy
+or activate search configuration.
+
+`human_oracle` records batch/view/submission/replay/seal lifecycle using only
+batch, unit, case and annotation IDs plus bounded counts and stable error types.
+It never logs raw principal values, principal HMACs, the Owner allowlist digest,
+reason/judgment values, Query text, product IDs/titles, result lists, request
+bodies, paths or exception messages. Raw intent and Top-3 behavior views are transient owner-only HTTP
+responses with `no-store`; immutable Oracle artifacts contain hashes and IDs,
+not raw display content.
+
 ## Privacy and public errors
 
 The formatter normalizes case, punctuation and camelCase before recursively
@@ -358,6 +397,19 @@ systemd-analyze cat-config systemd/journald.conf
     `completed_query_count`. Search text, product IDs/titles and exception
     messages never enter logs. Enable `catalog=INFO` separately to inspect the
     59-call boundary and interruptible SQL timing.
+18. `bad_case_supervisor`: enable only this module and filter by `execution_id`
+    or supervisor `receipt_id` to distinguish dispatch, hard deadline,
+    TERM/KILL escalation and durable completion. Enable `bad_case_worker`
+    separately only when child startup or envelope production is suspect.
+19. `diagnostic_experiments`: enable only this module while requesting a plan;
+    filter by `diagnostic_id`, `query_set_id`, `experiment_plan_id` or the
+    allowlisted `strategy_id`. Inspect the private evidence artifacts when the
+    plan details are required; they are intentionally absent from logs.
+20. `human_oracle`: enable only this module while creating/reviewing one batch;
+    filter by `oracle_batch_id`, `unit_id` or annotation ID. Inspect the private
+    Oracle directories for immutable state. Reproduce intent-view, behavior
+    replay, CAS conflict and seal independently; never export transient raw
+    views or the principal-HMAC key with diagnostics.
 
 `tests/test_observability.py` and `tests/test_catalog_search.py` verify JSON structure, module isolation,
 redaction variants, error classification, stable events, low-noise defaults and
@@ -390,3 +442,11 @@ completion, mid-batch failure counts, SQLite deadline interruption,
 cross-process locking, source/index/authority binding, offline tamper rejection,
 raw-content exclusion and owner-only sample limits. Production keeps verbose
 `bad_case` logging off unless that subsystem is being diagnosed.
+Worker tests additionally launch a real isolated child, enforce bounded IPC,
+exercise TERM/KILL and deadline-boundary recovery, and verify a private
+content-addressed supervisor receipt. Diagnostic-experiment tests verify fixed
+ID loading, allowlisted strategies, token protection and locked quality/write
+lanes. Human Oracle tests verify blind-view separation, complete cluster
+census, append-only idempotency/CAS, intent invalidation, server-side Top-10
+replay, seal completeness, module-isolated failure logs and absence of raw or
+sensitive fields.

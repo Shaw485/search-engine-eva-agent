@@ -60,8 +60,11 @@ they depend on filesystem and SQLite cache state.
 Before the first search, all 59 Query strings must satisfy the catalog contract
 of at most 200 characters and 16 searchable tokens. `search_many` then uses one
 read-only immutable SQLite connection, exactly 59 Query search calls, a
-120-second batch budget, a 5-second per-Query budget, and a SQLite progress handler that can
-interrupt active SQL. One error aborts the whole batch.
+120-second child batch budget, a 5-second per-Query budget, and a SQLite progress
+handler that can interrupt active SQL. One error aborts the whole batch. The
+parent additionally enforces a 125-second monotonic process-group deadline; it
+sends `SIGTERM`, waits one second, escalates to `SIGKILL`, waits one more second
+and reaps the child before returning a terminal outcome.
 
 A completed artifact is published only when all 59 expected case IDs appear
 exactly once, all 39 variants link to their identity Query, the catalog index
@@ -75,6 +78,19 @@ Two IDs have different purposes:
 - `diagnostic_id` is a deterministic content ID for the evidence;
 - `execution_id` is random for one click/run and correlates its receipt and logs.
 
+A successful supervised run has a third content-addressed ID,
+`bad-case-supervisor-execution-*`. Its private immutable receipt binds the
+parent execution to the verified child execution receipt, diagnostic ID,
+deadline policy, TERM/KILL grace values, trace and one allowlisted completion
+observation. The API loads and revalidates this receipt before claiming that the
+hard worker boundary was enforced. It does not change deterministic diagnostic
+identity.
+
+For that reason, the reusable `bad-case-diagnostic-v1` artifact retains its
+legacy `no_hard_worker_deadline_enforcement` limitation: the artifact alone
+cannot prove which parent executed it. The API v2 claim is execution-scoped and
+is valid only when the separate supervisor receipt has been loaded and linked.
+
 The evidence artifact stores Query hashes, hashed ordered product keys and
 aggregate diagnostics. It stores no raw Query, product ID, title, label or
 score. The owner-only API may return at most 12 understandable samples and at
@@ -87,18 +103,23 @@ Query-set linkage validation without searching. `rerun_bad_case_diagnostic`
 performs all 59 searches again for reproducibility; it is deliberately not
 called offline Replay.
 
-## Concurrency, storage and remaining limitation
+## Concurrency, worker isolation and storage
 
-The API rejects concurrent work in-process and the artifact root uses a
-non-blocking cross-process `flock`. Immutable hard-link publication prevents a
-different payload from overwriting an existing content ID. The private store
-has a 256 MiB watermark, 2 GiB free-space preflight, and per-file size limits.
+The API rejects concurrent work in-process. The parent supervisor and child
+artifact runner use separate non-blocking cross-process `flock` locks. The
+child runs as a fixed isolated Python module in a new POSIX process group, reads
+a strict allowlisted environment and returns one bounded framed envelope over
+an anonymous pipe; stdout is discarded and credentials are not forwarded.
+Immutable publication prevents a different payload from overwriting an
+existing content ID. The private store has a 256 MiB watermark, 2 GiB
+free-space preflight, per-file size limits and private supervisor-receipt
+permissions.
 
-SQLite SQL is interruptible, but this synchronous process still has no
-force-terminable worker deadline. A stuck Python/native operation outside the
-SQL progress handler cannot be killed independently. This limitation is fixed
-in every response as `no_hard_worker_deadline_enforcement`; the next stage must
-move execution to a killable worker before larger data or model-driven loops.
+The hard deadline is an execution-isolation guarantee, not a hostile-code
+sandbox or a search-quality claim. POSIX uninterruptible I/O can still delay
+kernel-level termination; an unreaped process is therefore reported as a
+distinct critical failure and never as success. A proxy timeout alone is never
+treated as worker termination.
 
 The single-stage full-catalog baseline also cannot diagnose recall/fusion/
 coarse-rank stage drop. That requires a stage-aware executor and remains a
@@ -120,11 +141,14 @@ Artifacts are stored below ignored `runs/` by default:
 runs/query-sets/
 runs/bad-case-diagnostics/evidence/
 runs/bad-case-diagnostics/executions/
+runs/bad-case-diagnostics/supervisor-executions/
 runs/bad-case-diagnostics/attempts/
 ```
 
-Filter logs by `execution_id`, `diagnostic_id`, `failure_stage` or the API
-request `trace_id`. Raw Query text remains in the separate private Query-set
-artifact and may also appear in the transient owner-only API response. Limited
-product display content exists only in that response. Neither is persisted in
-the diagnostic artifact or copied into logs.
+Filter `bad_case` logs by `execution_id`, `diagnostic_id` or `failure_stage`;
+filter `bad_case_supervisor` by execution/receipt ID and
+`bad_case_worker` by execution ID. Raw Query text remains in the separate
+private Query-set artifact and may also appear in the transient owner-only API
+response. Limited product display content exists only in that response.
+Neither is persisted in the diagnostic or supervisor artifacts or copied into
+logs.

@@ -35,6 +35,7 @@ def apply_strategy_decision(**kwargs):
 def _apply_decision_worker(
     project_root: str,
     proposal_id: str,
+    code_revision: str,
     start_event,
     result_queue,
 ) -> None:
@@ -44,6 +45,7 @@ def _apply_decision_worker(
             project_root=project_root,
             proposal_id=proposal_id,
             decision="approve",
+            revision_provider=lambda _root: code_revision,
         )
         result_queue.put(("applied", proposal_id, result["decision_id"]))
     except Exception as exc:  # pragma: no cover - asserted in the parent process
@@ -680,12 +682,19 @@ def test_cross_process_decision_lock_allows_only_one_same_parent_approval(
     context = multiprocessing.get_context("fork")
     start_event = context.Event()
     result_queue = context.Queue()
+    revisions = ("a" * 40, "b" * 40)
     processes = [
         context.Process(
             target=_apply_decision_worker,
-            args=(str(project), proposal["proposal_id"], start_event, result_queue),
+            args=(
+                str(project),
+                proposal["proposal_id"],
+                revision,
+                start_event,
+                result_queue,
+            ),
         )
-        for proposal in proposals
+        for proposal, revision in zip(proposals, revisions, strict=True)
     ]
     for process in processes:
         process.start()

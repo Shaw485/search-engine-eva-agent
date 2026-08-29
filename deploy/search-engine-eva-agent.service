@@ -8,6 +8,7 @@ User=www-data
 Group=www-data
 WorkingDirectory=/var/www/search-engine-eva-agent
 EnvironmentFile=/etc/search-engine-eva-agent.env
+EnvironmentFile=/etc/search-engine-eva-agent-revision.env
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=SEARCH_BACKEND=local
@@ -21,6 +22,10 @@ Environment=SEARCH_LOG_LEVEL_CATALOG=WARNING
 Environment=SEARCH_LOG_LEVEL_AGENT_OPTIMIZATION=INFO
 Environment=SEARCH_LOG_LEVEL_AGENT_EVAL=INFO
 Environment=SEARCH_LOG_LEVEL_BAD_CASE=INFO
+Environment=SEARCH_LOG_LEVEL_BAD_CASE_SUPERVISOR=INFO
+Environment=SEARCH_LOG_LEVEL_BAD_CASE_WORKER=INFO
+Environment=SEARCH_LOG_LEVEL_DIAGNOSTIC_EXPERIMENTS=INFO
+Environment=SEARCH_LOG_LEVEL_HUMAN_ORACLE=INFO
 Environment=SEARCH_LOG_LEVEL_RETRIEVAL=INFO
 Environment=SEARCH_LOG_LEVEL_RETRIEVAL_ANALYSIS=INFO
 Environment=SEARCH_LOG_LEVEL_STAGE_DIAGNOSIS=INFO
@@ -32,6 +37,9 @@ StandardError=journal
 SyslogIdentifier=search-engine-eva-agent
 Restart=on-failure
 RestartSec=3
+KillMode=control-group
+SendSIGKILL=yes
+TimeoutStopSec=10s
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true

@@ -53,8 +53,24 @@ ranking-change-needs-judgment candidates; it reads no relevance labels and
 computes no quality metric. Completed evidence binds the Query set, executor
 revision, index identity/config, Top 10 and all 59 calls, while a separate
 execution receipt records dynamic timing. It cannot diagnose multi-stage drop,
-approve or activate a strategy, or force-kill work outside SQLite's
-interruptible SQL boundary.
+approve or activate a strategy. Execution now runs in a fixed POSIX child
+process group behind a 125-second monotonic deadline; a separate immutable
+supervisor receipt proves which completed execution crossed that boundary.
+
+The current 40-candidate population can now be rebuilt as a deterministic Human
+Diagnostic Oracle batch: 30 synthetic intent judgments are collected before 40
+behavior judgments, with append-only/CAS state and server-verified Top-3 views.
+This helps distinguish useful diagnostic patterns from false positives. It is
+still not a product-relevance label set or a formal quality Oracle, so it cannot
+authorize a strategy or unlock the quality lane by itself.
+
+A separate diagnostic router turns that immutable evidence into one allowlisted
+experiment plan. The first candidate keeps strict AND as the primary search,
+uses drop-one-token routes only after a zero result, protects numeric/model/
+product-ID-like tokens and fuses fallback ranks with RRF. The plan explicitly
+separates full-catalog behavior recovery from labelled quality evidence and
+keeps quality conclusions, strategy writes and activation locked. It is an
+executable experiment specification, not proof that the candidate is better.
 
 A local-only stage-aware Agent task now makes recall, RRF fusion and coarse
 ranking explicit. On the fixed 20-Query fully judged pool it diagnoses the
@@ -103,6 +119,8 @@ explicit pending integration check, not an implicit fallback or a claimed pass.
 - Agent Evaluation Harness evidence: [docs/AGENT_EVALUATION_REPORT.md](docs/AGENT_EVALUATION_REPORT.md)
 - Source-bounded Query constructor: [docs/QUERY_CONSTRUCTOR.md](docs/QUERY_CONSTRUCTOR.md)
 - Source-bounded Bad Case diagnostics: [docs/BAD_CASE_DIAGNOSTICS.md](docs/BAD_CASE_DIAGNOSTICS.md)
+- Human Diagnostic Oracle: [docs/HUMAN_DIAGNOSTIC_ORACLE.md](docs/HUMAN_DIAGNOSTIC_ORACLE.md)
+- Diagnostic/Oracle/worker decision: [docs/adr/007-diagnostic-oracle-worker-and-evidence-lanes.md](docs/adr/007-diagnostic-oracle-worker-and-evidence-lanes.md)
 - Required learning: [docs/LEARNING_CHECKPOINTS.md](docs/LEARNING_CHECKPOINTS.md)
 - Decision and contribution provenance: [docs/CONTRIBUTION_LOG.md](docs/CONTRIBUTION_LOG.md)
 - Logging and independent diagnostics: [docs/LOGGING.md](docs/LOGGING.md)
@@ -160,7 +178,9 @@ strategy, deploys code or unlocks larger evaluation profiles.
 
 `make bad-cases-smoke` preflights and searches all 59 cases, then stores hashed
 behavioral evidence under `runs/bad-case-diagnostics/`. Its categories are
-diagnostic candidates, not relevance judgments or formal benchmark results.
+diagnostic candidates, not relevance judgments or formal benchmark results. A
+successful summary also cites the private immutable supervisor receipt that
+binds the execution to the hard worker policy.
 
 The Stage 2 CLI trusts the local operator and only loads artifacts directly from
 the project's ignored `runs/` store. Run and comparison IDs are content hashes:

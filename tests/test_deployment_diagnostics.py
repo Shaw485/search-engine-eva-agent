@@ -44,6 +44,9 @@ def test_agent_page_and_analysis_endpoints_require_basic_auth() -> None:
         nginx, "= /search-eval-api/agent/query-constructor/build"
     )
     bad_cases = _nginx_location(nginx, "= /search-eval-api/agent/bad-cases/run")
+    diagnostic_plan = _nginx_location(
+        nginx, "= /search-eval-api/agent/diagnostic-experiments/plan"
+    )
 
     assert 'auth_basic "Search Agent";' in agent_page
     assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in agent_page
@@ -82,8 +85,46 @@ def test_agent_page_and_analysis_endpoints_require_basic_auth() -> None:
     assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in bad_cases
     assert "proxy_pass http://127.0.0.1:8010/agent/bad-cases/run;" in bad_cases
     assert 'proxy_set_header Authorization "";' in bad_cases
-    assert "proxy_read_timeout 130s;" in bad_cases
+    assert "proxy_read_timeout 140s;" in bad_cases
     assert 'add_header Cache-Control "no-store" always;' in bad_cases
+
+    assert 'auth_basic "Search Agent";' in diagnostic_plan
+    assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in (
+        diagnostic_plan
+    )
+    assert (
+        "proxy_pass http://127.0.0.1:8010/agent/diagnostic-experiments/plan;"
+        in diagnostic_plan
+    )
+    assert 'proxy_set_header Authorization "";' in diagnostic_plan
+    assert 'add_header Cache-Control "no-store" always;' in diagnostic_plan
+
+
+def test_human_oracle_routes_are_exact_owner_only_and_strip_credentials() -> None:
+    nginx = (ROOT / "deploy/nginx-search-eval.conf").read_text(encoding="utf-8")
+    route_suffixes = (
+        "batches/create",
+        "batches/status",
+        "intents/view",
+        "intents/submit",
+        "behaviors/view",
+        "behaviors/submit",
+        "batches/seal",
+    )
+
+    for suffix in route_suffixes:
+        external = f"= /search-eval-api/agent/human-oracle/{suffix}"
+        internal = f"http://127.0.0.1:8010/agent/human-oracle/{suffix};"
+        location = _nginx_location(nginx, external)
+        assert "access_log off;" in location
+        assert 'auth_basic "Search Agent";' in location
+        assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in location
+        assert 'add_header Cache-Control "no-store" always;' in location
+        assert f"proxy_pass {internal}" in location
+        assert "proxy_set_header X-Search-Owner-Principal $remote_user;" in location
+        assert 'proxy_set_header Authorization "";' in location
+        expected_timeout = "40s" if suffix == "behaviors/view" else "15s"
+        assert f"proxy_read_timeout {expected_timeout};" in location
 
 
 def test_catalog_artifact_is_read_only_and_configured_for_service_user() -> None:
@@ -109,18 +150,31 @@ def test_agent_runtime_store_is_the_only_writable_service_path() -> None:
     runtime = "/var/lib/search-engine-eva-agent/runtime"
 
     assert "EnvironmentFile=/etc/search-engine-eva-agent.env" in service
+    assert "EnvironmentFile=/etc/search-engine-eva-agent-revision.env" in service
     assert f"Environment=SEARCH_AGENT_ARTIFACT_ROOT={runtime}" in service
     assert "Environment=SEARCH_LOG_LEVEL_AGENT_OPTIMIZATION=INFO" in service
     assert "Environment=SEARCH_LOG_LEVEL_AGENT_EVAL=INFO" in service
     assert "Environment=SEARCH_LOG_LEVEL_BAD_CASE=INFO" in service
+    assert "Environment=SEARCH_LOG_LEVEL_BAD_CASE_SUPERVISOR=INFO" in service
+    assert "Environment=SEARCH_LOG_LEVEL_BAD_CASE_WORKER=INFO" in service
+    assert "Environment=SEARCH_LOG_LEVEL_DIAGNOSTIC_EXPERIMENTS=INFO" in service
+    assert "Environment=SEARCH_LOG_LEVEL_HUMAN_ORACLE=INFO" in service
     assert "Environment=SEARCH_LOG_LEVEL_RETRIEVAL=INFO" in service
     assert "Environment=SEARCH_LOG_LEVEL_RETRIEVAL_ANALYSIS=INFO" in service
     assert "Environment=SEARCH_LOG_LEVEL_STAGE_DIAGNOSIS=INFO" in service
     assert "Environment=SEARCH_LOG_LEVEL_QUERY_CONSTRUCTOR=INFO" in service
     assert "ProtectSystem=strict" in service
+    assert "KillMode=control-group" in service
+    assert "SendSIGKILL=yes" in service
+    assert "TimeoutStopSec=10s" in service
     assert "ReadOnlyPaths=/var/www/search-engine-eva-agent" in service
     assert f"ReadWritePaths={runtime}" in service
     assert "UMask=0027" in service
     assert f"-o www-data -g www-data -m 0750 {runtime}" in deployment
     assert "SEARCH_CODE_REVISION=" in deployment
+    assert "SEARCH_HUMAN_ORACLE_ALLOWED_ORIGIN=https://shawspace.cn" in deployment
+    assert "SEARCH_HUMAN_ORACLE_ACTOR_HMAC_KEY=" in deployment
+    assert "SEARCH_HUMAN_ORACLE_ACTOR_HMAC_KEY_ID=" in deployment
+    assert "SEARCH_HUMAN_ORACLE_OWNER_HMAC_SHA256=" in deployment
+    assert "/etc/search-engine-eva-agent-revision.env" in deployment
     assert "sudo systemctl daemon-reload" in deployment

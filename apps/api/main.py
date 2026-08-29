@@ -10,6 +10,9 @@ import threading
 import time
 from collections import Counter
 from functools import lru_cache
+from hashlib import sha256
+from hmac import compare_digest
+from hmac import new as hmac_new
 from pathlib import Path
 from typing import Literal, Self
 
@@ -30,14 +33,59 @@ from search_quality.agent_eval.runner import run_agent_eval_suite
 from search_quality.bad_cases.artifacts import BadCaseRunInProgress
 from search_quality.bad_cases.contracts import (
     BadCaseCategoryCounts,
+    BadCaseDiagnosticArtifact,
 )
-from search_quality.bad_cases.runner import run_bad_case_diagnostics
+from search_quality.bad_cases.supervisor import (
+    DEFAULT_KILL_GRACE_MS,
+    DEFAULT_TERM_GRACE_MS,
+    DEFAULT_WORKER_DEADLINE_MS,
+    BadCaseWorkerDeadlineExceeded,
+    BadCaseWorkerError,
+    load_supervisor_execution_receipt,
+    supervise_bad_case_diagnostics,
+)
 from search_quality.catalog import (
     DEFAULT_CATALOG_INDEX,
     CatalogSearchService,
     InvalidCatalogQuery,
 )
+from search_quality.diagnostic_experiments import (
+    DiagnosticExperimentPlan,
+    load_diagnostic_artifacts,
+    load_resolved_diagnostic_evidence,
+    route_diagnostic_evidence,
+)
 from search_quality.evaluation.artifacts import require_clean_code_revision
+from search_quality.human_oracle import (
+    BehaviorJudgment,
+    BehaviorReason,
+    BehaviorSubmission,
+    HumanOracleArtifact,
+    HumanOracleRepository,
+    IntentJudgment,
+    IntentReason,
+    IntentSubmission,
+    OracleActor,
+    OracleBatchArtifact,
+    OracleBatchIncomplete,
+    OracleBatchSealed,
+    OracleBehaviorView,
+    OracleClientActionConflict,
+    OracleCompareAndSwapConflict,
+    OracleIntentView,
+    OracleInvalidDecision,
+    OracleReviewState,
+    OracleStorageError,
+    SealSubmission,
+    build_behavior_view,
+    build_intent_view,
+    build_oracle_batch,
+    collect_behavior_samples_for_unit,
+)
+from search_quality.human_oracle.contracts import (
+    BEHAVIOR_REASONS_BY_JUDGMENT,
+    INTENT_REASONS_BY_JUDGMENT,
+)
 from search_quality.observability import (
     classify_error,
     configure_logging,
@@ -46,6 +94,7 @@ from search_quality.observability import (
     new_trace_id,
 )
 from search_quality.query_constructor import build_smoke_query_set, store_query_set
+from search_quality.query_constructor.contracts import QuerySetArtifact
 from search_quality.smoke import run_smoke
 
 configure_logging()
@@ -78,6 +127,12 @@ def _agent_artifact_root() -> Path | None:
     if not resolved.is_dir():
         raise RuntimeError("configured strategy artifact root is unavailable")
     return resolved
+
+
+def _runtime_artifact_root() -> Path:
+    """Return the single private evidence root used by owner-only workflows."""
+
+    return _agent_artifact_root() or (PROJECT_ROOT / "runs")
 
 
 def _api_code_revision(project_root: Path) -> str:
@@ -207,6 +262,14 @@ async def request_diagnostics(request: Request, call_next):
                 "/agent/retrieval/analyze",
                 "/agent/eval/run",
                 "/agent/bad-cases/run",
+                "/agent/diagnostic-experiments/plan",
+                "/agent/human-oracle/batches/create",
+                "/agent/human-oracle/batches/seal",
+                "/agent/human-oracle/batches/status",
+                "/agent/human-oracle/behaviors/submit",
+                "/agent/human-oracle/behaviors/view",
+                "/agent/human-oracle/intents/submit",
+                "/agent/human-oracle/intents/view",
                 "/agent/query-constructor/build",
                 "/catalog/search",
                 "/health",
@@ -482,6 +545,437 @@ class BadCaseRunRequest(BaseModel):
     source: Literal["smoke"] = "smoke"
 
 
+class DiagnosticExperimentPlanRequest(BaseModel):
+    """Plan from one immutable diagnostic pair, never from arbitrary paths."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    diagnostic_id: str = Field(pattern=r"^bad-case-[0-9a-f]{12}$")
+    query_set_id: str = Field(pattern=r"^query-set-[0-9a-f]{12}$")
+
+
+class HumanOracleBatchCreateRequest(BaseModel):
+    """Create only from one fixed immutable diagnostic/Query-set pair."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    diagnostic_id: str = Field(pattern=r"^bad-case-[0-9a-f]{12}$")
+    query_set_id: str = Field(pattern=r"^query-set-[0-9a-f]{12}$")
+
+
+class HumanOracleBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    oracle_batch_id: str = Field(pattern=r"^oracle-batch-[0-9a-f]{12}$")
+
+
+class HumanOracleUnitRequest(HumanOracleBatchRequest):
+    unit_id: str = Field(pattern=r"^oracle-unit-[0-9a-f]{12}$")
+
+
+class HumanOracleIntentSubmitRequest(HumanOracleUnitRequest):
+    """Owner input only; actor identity is injected by the server."""
+
+    case_id: str = Field(pattern=r"^query-case-[0-9a-f]{12}$")
+    presentation_context_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    judgment: Literal["equivalent", "not_equivalent", "uncertain"]
+    reason_code: Literal[
+        "same_product_intent",
+        "obvious_typo_same_intent",
+        "meaning_changed",
+        "query_became_uninterpretable",
+        "ambiguous_intent",
+        "insufficient_context",
+    ]
+    client_action_id: str = Field(
+        pattern=(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-"
+            r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        )
+    )
+    expected_previous_annotation_id: str | None = Field(
+        default=None,
+        pattern=r"^oracle-intent-[0-9a-f]{12}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_reason(self) -> Self:
+        judgment = IntentJudgment(self.judgment)
+        reason = IntentReason(self.reason_code)
+        if reason not in INTENT_REASONS_BY_JUDGMENT[judgment]:
+            raise ValueError("intent reason does not match its judgment")
+        return self
+
+
+class HumanOracleBehaviorSubmitRequest(HumanOracleUnitRequest):
+    """Owner input only; evidence and actor identity cannot be uploaded."""
+
+    case_id: str = Field(pattern=r"^query-case-[0-9a-f]{12}$")
+    presentation_context_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    judgment: Literal["confirmed_issue", "acceptable", "uncertain"]
+    reason_code: Literal[
+        "owner_catalog_expectation",
+        "equivalent_intent_should_preserve_behavior",
+        "intent_not_equivalent",
+        "behavior_is_expected",
+        "catalog_coverage_unknown",
+        "insufficient_result_evidence",
+        "insufficient_domain_knowledge",
+    ]
+    intent_annotation_id: str | None = Field(
+        default=None,
+        pattern=r"^oracle-intent-[0-9a-f]{12}$",
+    )
+    client_action_id: str = Field(
+        pattern=(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-"
+            r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        )
+    )
+    expected_previous_annotation_id: str | None = Field(
+        default=None,
+        pattern=r"^oracle-behavior-[0-9a-f]{12}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_reason(self) -> Self:
+        judgment = BehaviorJudgment(self.judgment)
+        reason = BehaviorReason(self.reason_code)
+        if reason not in BEHAVIOR_REASONS_BY_JUDGMENT[judgment]:
+            raise ValueError("behavior reason does not match its judgment")
+        return self
+
+
+class HumanOracleSealRequest(HumanOracleBatchRequest):
+    client_action_id: str = Field(
+        pattern=(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-"
+            r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        )
+    )
+
+
+class HumanOracleUnitSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    unit_id: str = Field(pattern=r"^oracle-unit-[0-9a-f]{12}$")
+    source_case_id: str = Field(pattern=r"^query-case-[0-9a-f]{12}$")
+    stratum: Literal["source_zero_cluster", "source_nonzero_variant_zero"]
+    candidate_count: int = Field(ge=1, le=3)
+
+
+class HumanOracleBatchCreateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal["human-oracle-batch-api-summary-v1"]
+    oracle_batch_id: str = Field(pattern=r"^oracle-batch-[0-9a-f]{12}$")
+    diagnostic_id: str = Field(pattern=r"^bad-case-[0-9a-f]{12}$")
+    query_set_id: str = Field(pattern=r"^query-set-[0-9a-f]{12}$")
+    selected_cluster_count: Literal[20]
+    selected_candidate_count: Literal[40]
+    synthetic_intent_candidate_count: Literal[30]
+    units: list[HumanOracleUnitSummary] = Field(min_length=20, max_length=20)
+    formal_evaluation_allowed: Literal[False]
+    quality_conclusion_allowed: Literal[False]
+    strategy_write_count: Literal[0]
+
+    @model_validator(mode="after")
+    def validate_units(self) -> Self:
+        if len({item.unit_id for item in self.units}) != 20:
+            raise ValueError("Human Oracle API unit IDs must be unique")
+        if sum(item.candidate_count for item in self.units) != 40:
+            raise ValueError("Human Oracle API candidate counts must total 40")
+        return self
+
+
+class HumanOracleIntentSubmitResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal["human-oracle-intent-api-summary-v1"]
+    intent_annotation_id: str = Field(pattern=r"^oracle-intent-[0-9a-f]{12}$")
+    oracle_batch_id: str = Field(pattern=r"^oracle-batch-[0-9a-f]{12}$")
+    unit_id: str = Field(pattern=r"^oracle-unit-[0-9a-f]{12}$")
+    case_id: str = Field(pattern=r"^query-case-[0-9a-f]{12}$")
+    judgment: IntentJudgment
+    reason_code: IntentReason
+    supersedes_annotation_id: str | None = Field(
+        default=None,
+        pattern=r"^oracle-intent-[0-9a-f]{12}$",
+    )
+    result_evidence_was_withheld: Literal[True]
+    product_relevance_labels_created: Literal[0]
+
+
+class HumanOracleBehaviorSubmitResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal["human-oracle-behavior-api-summary-v1"]
+    behavior_annotation_id: str = Field(pattern=r"^oracle-behavior-[0-9a-f]{12}$")
+    oracle_batch_id: str = Field(pattern=r"^oracle-batch-[0-9a-f]{12}$")
+    unit_id: str = Field(pattern=r"^oracle-unit-[0-9a-f]{12}$")
+    case_id: str = Field(pattern=r"^query-case-[0-9a-f]{12}$")
+    judgment: BehaviorJudgment
+    reason_code: BehaviorReason
+    intent_annotation_id: str | None = Field(
+        default=None,
+        pattern=r"^oracle-intent-[0-9a-f]{12}$",
+    )
+    supersedes_annotation_id: str | None = Field(
+        default=None,
+        pattern=r"^oracle-behavior-[0-9a-f]{12}$",
+    )
+    product_relevance_labels_created: Literal[0]
+    root_cause_claimed: Literal[False]
+
+
+class HumanOracleSealResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal["human-oracle-seal-api-summary-v1"]
+    oracle_id: str = Field(pattern=r"^human-oracle-[0-9a-f]{12}$")
+    oracle_batch_id: str = Field(pattern=r"^oracle-batch-[0-9a-f]{12}$")
+    diagnostic_id: str = Field(pattern=r"^bad-case-[0-9a-f]{12}$")
+    synthetic_intent_annotation_count: Literal[30]
+    behavior_annotation_count: Literal[40]
+    product_relevance_labels_created: Literal[0]
+    formal_evaluation_allowed: Literal[False]
+    quality_conclusion_allowed: Literal[False]
+    root_cause_claimed: Literal[False]
+    strategy_write_count: Literal[0]
+    limitations: tuple[
+        Literal["single_owner_no_inter_annotator_agreement"],
+        Literal["selection_conditioned_development_set"],
+        Literal["synthetic_product_relevance_remains_unjudged"],
+        Literal["prior_exposure_not_controlled"],
+        Literal["diagnostic_judgment_is_not_root_cause"],
+    ]
+
+
+def _human_oracle_actor_from_request(request: Request) -> OracleActor:
+    """Derive a pseudonymous actor only inside the authenticated proxy boundary."""
+
+    content_type = request.headers.get("content-type", "")
+    if content_type.split(";", 1)[0].strip().lower() != "application/json":
+        logger.warning(
+            "human_oracle_request_rejected",
+            extra={"error_code": "json_content_type_required"},
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "human_oracle_request_invalid",
+                "message": "Human Oracle request is invalid",
+                "trace_id": current_trace_id(),
+            },
+        )
+
+    allowed_origin = os.environ.get("SEARCH_HUMAN_ORACLE_ALLOWED_ORIGIN")
+    actor_key = os.environ.get("SEARCH_HUMAN_ORACLE_ACTOR_HMAC_KEY")
+    actor_key_id = os.environ.get("SEARCH_HUMAN_ORACLE_ACTOR_HMAC_KEY_ID")
+    allowed_owner_hmac = os.environ.get("SEARCH_HUMAN_ORACLE_OWNER_HMAC_SHA256")
+    if (
+        allowed_origin is None
+        or re.fullmatch(
+            r"https?://(?:[A-Za-z0-9-]+\.)*[A-Za-z0-9-]+(?::[0-9]{1,5})?",
+            allowed_origin,
+        )
+        is None
+        or actor_key is None
+        or not 32 <= len(actor_key.encode("utf-8")) <= 512
+        or actor_key_id is None
+        or re.fullmatch(r"[a-z][a-z0-9-]{0,63}", actor_key_id) is None
+        or allowed_owner_hmac is None
+        or re.fullmatch(r"[0-9a-f]{64}", allowed_owner_hmac) is None
+    ):
+        logger.error(
+            "human_oracle_configuration_unavailable",
+            extra={"error_code": "human_oracle_configuration_invalid"},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "human_oracle_unavailable",
+                "message": "Human Oracle unavailable",
+                "trace_id": current_trace_id(),
+            },
+        )
+
+    if (
+        request.headers.get("origin") != allowed_origin
+        or request.headers.get("sec-fetch-site") != "same-origin"
+    ):
+        logger.warning(
+            "human_oracle_request_rejected",
+            extra={"error_code": "same_origin_required"},
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "human_oracle_request_invalid",
+                "message": "Human Oracle request is invalid",
+                "trace_id": current_trace_id(),
+            },
+        )
+
+    principal = request.headers.get("x-search-owner-principal")
+    if (
+        principal is None
+        or not 1 <= len(principal) <= 256
+        or principal != principal.strip()
+        or any(
+            ord(character) < 0x20 or ord(character) == 0x7F for character in principal
+        )
+    ):
+        logger.warning(
+            "human_oracle_request_rejected",
+            extra={"error_code": "owner_principal_required"},
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "human_oracle_request_invalid",
+                "message": "Human Oracle request is invalid",
+                "trace_id": current_trace_id(),
+            },
+        )
+    principal_hmac = hmac_new(
+        actor_key.encode("utf-8"),
+        principal.encode("utf-8"),
+        sha256,
+    ).hexdigest()
+    if not compare_digest(principal_hmac, allowed_owner_hmac):
+        logger.warning(
+            "human_oracle_request_rejected",
+            extra={"error_code": "owner_principal_not_authorized"},
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "human_oracle_owner_forbidden",
+                "message": "Human Oracle access forbidden",
+                "trace_id": current_trace_id(),
+            },
+        )
+    return OracleActor(
+        principal_hmac_sha256=principal_hmac,
+        actor_key_id=actor_key_id,
+    )
+
+
+def _human_oracle_repository() -> HumanOracleRepository:
+    return HumanOracleRepository(_runtime_artifact_root())
+
+
+def _load_human_oracle_evidence(
+    repository: HumanOracleRepository,
+    oracle_batch_id: str,
+) -> tuple[OracleBatchArtifact, BadCaseDiagnosticArtifact, QuerySetArtifact]:
+    """Reload and rebuild the batch from the immutable evidence on every action."""
+
+    batch = repository.load_batch(oracle_batch_id)
+    diagnostic, query_set = load_diagnostic_artifacts(
+        artifact_root=_runtime_artifact_root(),
+        diagnostic_id=batch.diagnostic_id,
+        query_set_id=batch.query_set_id,
+    )
+    if build_oracle_batch(diagnostic=diagnostic, query_set=query_set) != batch:
+        raise ValueError("Human Oracle batch evidence changed")
+    return batch, diagnostic, query_set
+
+
+def _raise_human_oracle_conflict(
+    *,
+    operation: str,
+    error: Exception,
+    oracle_batch_id: str | None = None,
+    unit_id: str | None = None,
+) -> None:
+    extra: dict[str, object] = {
+        "error_code": "human_oracle_state_conflict",
+        "error_type": type(error).__name__,
+        "operation": operation,
+    }
+    if oracle_batch_id is not None and re.fullmatch(
+        r"^oracle-batch-[0-9a-f]{12}$", oracle_batch_id
+    ):
+        extra["oracle_batch_id"] = oracle_batch_id
+    if unit_id is not None and re.fullmatch(r"^oracle-unit-[0-9a-f]{12}$", unit_id):
+        extra["unit_id"] = unit_id
+    logger.warning("human_oracle_api_conflict", extra=extra)
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "human_oracle_state_conflict",
+            "message": "Human Oracle evidence or state changed",
+            "trace_id": current_trace_id(),
+        },
+    ) from error
+
+
+def _raise_human_oracle_invalid_decision(
+    *,
+    operation: str,
+    error: Exception,
+    oracle_batch_id: str,
+    unit_id: str | None = None,
+) -> None:
+    extra: dict[str, object] = {
+        "error_code": "human_oracle_decision_invalid",
+        "error_type": type(error).__name__,
+        "operation": operation,
+        "oracle_batch_id": oracle_batch_id,
+    }
+    if unit_id is not None and re.fullmatch(r"^oracle-unit-[0-9a-f]{12}$", unit_id):
+        extra["unit_id"] = unit_id
+    logger.warning("human_oracle_api_decision_rejected", extra=extra)
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "code": "human_oracle_decision_invalid",
+            "message": "Human Oracle judgment is invalid",
+            "trace_id": current_trace_id(),
+        },
+    ) from error
+
+
+def _raise_human_oracle_unavailable(
+    *,
+    operation: str,
+    error: Exception,
+    oracle_batch_id: str | None = None,
+) -> None:
+    extra: dict[str, object] = {
+        "error_code": "human_oracle_unavailable",
+        "error_type": type(error).__name__,
+        "operation": operation,
+    }
+    if oracle_batch_id is not None and re.fullmatch(
+        r"^oracle-batch-[0-9a-f]{12}$", oracle_batch_id
+    ):
+        extra["oracle_batch_id"] = oracle_batch_id
+    logger.error("human_oracle_api_failed", extra=extra)
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "code": "human_oracle_unavailable",
+            "message": "Human Oracle unavailable",
+            "trace_id": current_trace_id(),
+        },
+    ) from error
+
+
+def _get_human_oracle_catalog_service() -> CatalogSearchService:
+    """Keep catalog startup failures distinct from stale evidence conflicts."""
+
+    try:
+        return get_catalog_search_service()
+    except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
+        _raise_human_oracle_unavailable(
+            operation="behavior_view_catalog_startup",
+            error=exc,
+        )
+
+
 BadCaseCategoryName = Literal[
     "zero_result",
     "spelling_sensitive",
@@ -573,7 +1067,7 @@ class BadCaseRunResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    schema_version: Literal["bad-case-api-summary-v1"]
+    schema_version: Literal["bad-case-api-summary-v2"]
     completed: Literal[True]
     diagnostic_id: str = Field(pattern=r"^bad-case-[0-9a-f]{12}$")
     execution_id: str = Field(pattern=r"^bad-case-execution-[0-9a-f]{32}$")
@@ -598,12 +1092,25 @@ class BadCaseRunResponse(BaseModel):
     locked_profiles_not_read: tuple[Literal["dev"], Literal["test"]]
     protected_profile_dispatch_count: Literal[0]
     strategy_write_count: Literal[0]
+    worker_policy_id: Literal["posix-process-group-deadline-v1"]
+    worker_deadline_ms: Literal[125000]
+    supervisor_receipt_id: str = Field(
+        pattern=r"^bad-case-supervisor-execution-[0-9a-f]{12}$"
+    )
+    term_grace_ms: Literal[1000]
+    kill_grace_ms: Literal[1000]
+    completion_observation: Literal[
+        "worker_result",
+        "deadline_boundary_recovery",
+        "protocol_recovery",
+    ]
+    worker_hard_deadline_enforced: Literal[True]
     limitations: tuple[
         Literal["synthetic_queries_are_unjudged"],
         Literal["diagnostics_do_not_claim_relevance_improvement"],
         Literal["development_smoke_is_not_final_evaluation"],
         Literal["single_stage_catalog_cannot_diagnose_stage_drop"],
-        Literal["no_hard_worker_deadline_enforcement"],
+        Literal["worker_deadline_enforcement_is_execution_scope"],
     ]
 
     @model_validator(mode="after")
@@ -1079,19 +1586,31 @@ def agent_bad_cases_run(request: BadCaseRunRequest) -> dict:
             },
         )
     try:
-        run = run_bad_case_diagnostics(
+        run = supervise_bad_case_diagnostics(
             project_root=PROJECT_ROOT,
             artifact_root=_agent_artifact_root(),
+            catalog_index_path=_catalog_index_path(),
+            executor_revision=_api_code_revision(PROJECT_ROOT),
             source_profile=request.source,
-            revision_provider=_api_code_revision,
-            # Bind metadata and searches to a fresh service each run. The
-            # general public endpoint may cache readiness, but deterministic
-            # evidence must detect an atomically replaced catalog index.
-            search_service=CatalogSearchService(_catalog_index_path()),
+            deadline_ms=DEFAULT_WORKER_DEADLINE_MS,
+            trace_id=current_trace_id(),
         )
         artifact = run.artifact
+        supervisor_receipt = load_supervisor_execution_receipt(
+            _runtime_artifact_root(),
+            run.execution.execution_id,
+        )
+        if (
+            supervisor_receipt.diagnostic_id != artifact.diagnostic_id
+            or supervisor_receipt.policy_id != "posix-process-group-deadline-v1"
+            or supervisor_receipt.deadline_ms != DEFAULT_WORKER_DEADLINE_MS
+            or supervisor_receipt.term_grace_ms != DEFAULT_TERM_GRACE_MS
+            or supervisor_receipt.kill_grace_ms != DEFAULT_KILL_GRACE_MS
+            or supervisor_receipt.completed is not True
+        ):
+            raise ValueError("Bad Case supervisor receipt contradicts the API run")
         return {
-            "schema_version": "bad-case-api-summary-v1",
+            "schema_version": "bad-case-api-summary-v2",
             "completed": artifact.completed,
             "diagnostic_id": artifact.diagnostic_id,
             "execution_id": run.execution.execution_id,
@@ -1120,7 +1639,20 @@ def agent_bad_cases_run(request: BadCaseRunRequest) -> dict:
                 artifact.protected_profile_dispatch_count
             ),
             "strategy_write_count": artifact.strategy_write_count,
-            "limitations": artifact.limitations,
+            "worker_policy_id": supervisor_receipt.policy_id,
+            "worker_deadline_ms": supervisor_receipt.deadline_ms,
+            "supervisor_receipt_id": supervisor_receipt.receipt_id,
+            "term_grace_ms": supervisor_receipt.term_grace_ms,
+            "kill_grace_ms": supervisor_receipt.kill_grace_ms,
+            "completion_observation": supervisor_receipt.completion_observation,
+            "worker_hard_deadline_enforced": True,
+            "limitations": (
+                "synthetic_queries_are_unjudged",
+                "diagnostics_do_not_claim_relevance_improvement",
+                "development_smoke_is_not_final_evaluation",
+                "single_stage_catalog_cannot_diagnose_stage_drop",
+                "worker_deadline_enforcement_is_execution_scope",
+            ),
         }
     except BadCaseRunInProgress as exc:
         raise HTTPException(
@@ -1131,7 +1663,31 @@ def agent_bad_cases_run(request: BadCaseRunRequest) -> dict:
                 "trace_id": current_trace_id(),
             },
         ) from exc
-    except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
+    except BadCaseWorkerDeadlineExceeded as exc:
+        trace_id = current_trace_id()
+        logger.error(
+            "bad_case_worker_deadline_exceeded",
+            extra={
+                "error_code": exc.error_code,
+                "execution_id": exc.execution_id,
+            },
+        )
+        raise HTTPException(
+            status_code=504,
+            detail={
+                "code": "bad_case_worker_deadline_exceeded",
+                "message": "Bad Case diagnostics exceeded the worker deadline",
+                "trace_id": trace_id,
+                "execution_id": exc.execution_id,
+            },
+        ) from exc
+    except (
+        BadCaseWorkerError,
+        OSError,
+        RuntimeError,
+        ValueError,
+        sqlite3.Error,
+    ) as exc:
         trace_id = current_trace_id()
         logger.error(
             "bad_case_run_failed",
@@ -1150,6 +1706,502 @@ def agent_bad_cases_run(request: BadCaseRunRequest) -> dict:
         ) from exc
     finally:
         _BAD_CASE_LOCK.release()
+
+
+@app.post(
+    "/agent/diagnostic-experiments/plan",
+    response_model=DiagnosticExperimentPlan,
+)
+def agent_diagnostic_experiment_plan(
+    request: DiagnosticExperimentPlanRequest,
+) -> DiagnosticExperimentPlan:
+    """Map trusted behavior evidence to one bounded, non-mutating experiment."""
+
+    try:
+        evidence = load_resolved_diagnostic_evidence(
+            artifact_root=_runtime_artifact_root(),
+            diagnostic_id=request.diagnostic_id,
+            query_set_id=request.query_set_id,
+        )
+        return route_diagnostic_evidence(evidence)
+    except (OSError, RuntimeError, ValueError) as exc:
+        trace_id = current_trace_id()
+        logger.error(
+            "diagnostic_experiment_plan_failed",
+            extra={
+                "diagnostic_id": request.diagnostic_id,
+                "error_code": classify_error(exc),
+                "error_type": type(exc).__name__,
+                "query_set_id": request.query_set_id,
+            },
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "diagnostic_evidence_unavailable",
+                "message": "Diagnostic evidence is unavailable or stale",
+                "trace_id": trace_id,
+            },
+        ) from exc
+
+
+@app.post(
+    "/agent/human-oracle/batches/create",
+    response_model=HumanOracleBatchCreateResponse,
+)
+def human_oracle_batch_create(
+    http_request: Request,
+    payload: HumanOracleBatchCreateRequest,
+) -> dict:
+    """Create the fixed 20-cluster census from immutable diagnostic evidence."""
+
+    _human_oracle_actor_from_request(http_request)
+    try:
+        diagnostic, query_set = load_diagnostic_artifacts(
+            artifact_root=_runtime_artifact_root(),
+            diagnostic_id=payload.diagnostic_id,
+            query_set_id=payload.query_set_id,
+        )
+        batch = build_oracle_batch(diagnostic=diagnostic, query_set=query_set)
+        repository = _human_oracle_repository()
+        batch = repository.create_batch(
+            batch,
+            diagnostic=diagnostic,
+            query_set=query_set,
+        )
+        response = {
+            "schema_version": "human-oracle-batch-api-summary-v1",
+            "oracle_batch_id": batch.oracle_batch_id,
+            "diagnostic_id": batch.diagnostic_id,
+            "query_set_id": batch.query_set_id,
+            "selected_cluster_count": batch.selected_cluster_count,
+            "selected_candidate_count": batch.selected_candidate_count,
+            "synthetic_intent_candidate_count": (
+                batch.synthetic_intent_candidate_count
+            ),
+            "units": [
+                {
+                    "unit_id": unit.unit_id,
+                    "source_case_id": unit.source_case_id,
+                    "stratum": unit.stratum.value,
+                    "candidate_count": len(unit.candidates),
+                }
+                for unit in batch.units
+            ],
+            "formal_evaluation_allowed": batch.formal_evaluation_allowed,
+            "quality_conclusion_allowed": batch.quality_conclusion_allowed,
+            "strategy_write_count": batch.strategy_write_count,
+        }
+        logger.info(
+            "human_oracle_api_completed",
+            extra={
+                "diagnostic_id": batch.diagnostic_id,
+                "operation": "batch_create",
+                "oracle_batch_id": batch.oracle_batch_id,
+            },
+        )
+        return response
+    except (FileNotFoundError, ValueError) as exc:
+        _raise_human_oracle_conflict(operation="batch_create", error=exc)
+    except (OracleStorageError, OSError) as exc:
+        _raise_human_oracle_unavailable(operation="batch_create", error=exc)
+
+
+@app.post(
+    "/agent/human-oracle/batches/status",
+    response_model=OracleReviewState,
+)
+def human_oracle_batch_status(
+    http_request: Request,
+    payload: HumanOracleBatchRequest,
+) -> OracleReviewState:
+    """Return safe progress/CAS heads without raw Query or result content."""
+
+    _human_oracle_actor_from_request(http_request)
+    try:
+        repository = _human_oracle_repository()
+        _load_human_oracle_evidence(repository, payload.oracle_batch_id)
+        state = repository.review_state(payload.oracle_batch_id)
+        logger.info(
+            "human_oracle_api_completed",
+            extra={
+                "operation": "batch_status",
+                "oracle_batch_id": state.oracle_batch_id,
+            },
+        )
+        return state
+    except (ValueError, FileNotFoundError) as exc:
+        _raise_human_oracle_conflict(
+            operation="batch_status",
+            error=exc,
+            oracle_batch_id=payload.oracle_batch_id,
+        )
+    except (OracleStorageError, OSError) as exc:
+        _raise_human_oracle_unavailable(
+            operation="batch_status",
+            error=exc,
+            oracle_batch_id=payload.oracle_batch_id,
+        )
+
+
+@app.post(
+    "/agent/human-oracle/intents/view",
+    response_model=OracleIntentView,
+)
+def human_oracle_intent_view(
+    http_request: Request,
+    payload: HumanOracleUnitRequest,
+) -> OracleIntentView:
+    """Present Query text alone; result evidence stays withheld in phase one."""
+
+    _human_oracle_actor_from_request(http_request)
+    try:
+        repository = _human_oracle_repository()
+        batch, _diagnostic, query_set = _load_human_oracle_evidence(
+            repository,
+            payload.oracle_batch_id,
+        )
+        view = build_intent_view(
+            batch=batch,
+            query_set=query_set,
+            unit_id=payload.unit_id,
+        )
+        logger.info(
+            "human_oracle_api_completed",
+            extra={
+                "operation": "intent_view",
+                "oracle_batch_id": batch.oracle_batch_id,
+                "unit_id": view.unit_id,
+            },
+        )
+        return view
+    except (ValueError, FileNotFoundError) as exc:
+        _raise_human_oracle_conflict(
+            operation="intent_view",
+            error=exc,
+            oracle_batch_id=payload.oracle_batch_id,
+            unit_id=payload.unit_id,
+        )
+    except (OracleStorageError, OSError) as exc:
+        _raise_human_oracle_unavailable(
+            operation="intent_view",
+            error=exc,
+            oracle_batch_id=payload.oracle_batch_id,
+        )
+
+
+@app.post(
+    "/agent/human-oracle/intents/submit",
+    response_model=HumanOracleIntentSubmitResponse,
+)
+def human_oracle_intent_submit(
+    http_request: Request,
+    payload: HumanOracleIntentSubmitRequest,
+) -> dict:
+    """Store one intent judgment with CAS and idempotency controls."""
+
+    actor = _human_oracle_actor_from_request(http_request)
+    try:
+        repository = _human_oracle_repository()
+        _load_human_oracle_evidence(repository, payload.oracle_batch_id)
+        annotation = repository.submit_intent(
+            IntentSubmission(
+                **payload.model_dump(
+                    mode="python",
+                    exclude={"judgment", "reason_code"},
+                ),
+                judgment=IntentJudgment(payload.judgment),
+                reason_code=IntentReason(payload.reason_code),
+                actor=actor,
+            )
+        )
+        logger.info(
+            "human_oracle_api_completed",
+            extra={
+                "intent_annotation_id": annotation.intent_annotation_id,
+                "operation": "intent_submit",
+                "oracle_batch_id": annotation.oracle_batch_id,
+                "unit_id": annotation.unit_id,
+            },
+        )
+        return {
+            "schema_version": "human-oracle-intent-api-summary-v1",
+            "intent_annotation_id": annotation.intent_annotation_id,
+            "oracle_batch_id": annotation.oracle_batch_id,
+            "unit_id": annotation.unit_id,
+            "case_id": annotation.case_id,
+            "judgment": annotation.judgment,
+            "reason_code": annotation.reason_code,
+            "supersedes_annotation_id": annotation.supersedes_annotation_id,
+            "result_evidence_was_withheld": (
+                annotation.oracle_ui_withheld_result_evidence
+            ),
+            "product_relevance_labels_created": (
+                annotation.product_relevance_labels_created
+            ),
+        }
+    except OracleInvalidDecision as exc:
+        _raise_human_oracle_invalid_decision(
+            operation="intent_submit",
+            error=exc,
+            oracle_batch_id=payload.oracle_batch_id,
+            unit_id=payload.unit_id,
+        )
+    except (
+        OracleBatchSealed,
+        OracleClientActionConflict,
+        OracleCompareAndSwapConflict,
+        ValueError,
+        FileNotFoundError,
+    ) as exc:
+        _raise_human_oracle_conflict(
+            operation="intent_submit",
+            error=exc,
+            oracle_batch_id=payload.oracle_batch_id,
+            unit_id=payload.unit_id,
+        )
+    except (OracleStorageError, OSError) as exc:
+        _raise_human_oracle_unavailable(
+            operation="intent_submit",
+            error=exc,
+            oracle_batch_id=payload.oracle_batch_id,
+        )
+
+
+@app.post(
+    "/agent/human-oracle/behaviors/view",
+    response_model=OracleBehaviorView,
+)
+def human_oracle_behavior_view(
+    http_request: Request,
+    payload: HumanOracleUnitRequest,
+) -> OracleBehaviorView:
+    """Re-run and verify one unit after all 30 intent judgments exist."""
+
+    _human_oracle_actor_from_request(http_request)
+    try:
+        repository = _human_oracle_repository()
+        batch, diagnostic, query_set = _load_human_oracle_evidence(
+            repository,
+            payload.oracle_batch_id,
+        )
+        state = repository.review_state(batch.oracle_batch_id)
+        if state.projection.active_intent_annotation_count != 30:
+            raise OracleBatchIncomplete(
+                "all 30 intent judgments are required before behavior evidence"
+            )
+        unit = next(
+            (item for item in batch.units if item.unit_id == payload.unit_id),
+            None,
+        )
+        if unit is None:
+            raise ValueError("Oracle unit does not belong to its batch")
+        active_intents = {}
+        for candidate in unit.candidates:
+            intent = repository.active_intent_for_case(
+                batch.oracle_batch_id,
+                candidate.case_id,
+            )
+            if intent is not None:
+                active_intents[candidate.case_id] = intent
+        samples = collect_behavior_samples_for_unit(
+            batch=batch,
+            diagnostic=diagnostic,
+            query_set=query_set,
+            unit_id=payload.unit_id,
+            search_service=_get_human_oracle_catalog_service(),
+        )
+        view = build_behavior_view(
+            batch=batch,
+            diagnostic=diagnostic,
+            query_set=query_set,
+            unit_id=payload.unit_id,
+            samples=samples,
+            active_intents=active_intents,
+        )
+        logger.info(
+            "human_oracle_api_completed",
+            extra={
+                "operation": "behavior_view",
+                "oracle_batch_id": batch.oracle_batch_id,
+                "unit_id": view.unit_id,
+            },
+        )
+        return view
+    except (
+        OracleBatchIncomplete,
+        RuntimeError,
+        ValueError,
+        FileNotFoundError,
+    ) as exc:
+        _raise_human_oracle_conflict(
+            operation="behavior_view",
+            error=exc,
+            oracle_batch_id=payload.oracle_batch_id,
+            unit_id=payload.unit_id,
+        )
+    except (OracleStorageError, OSError, sqlite3.Error) as exc:
+        _raise_human_oracle_unavailable(
+            operation="behavior_view",
+            error=exc,
+            oracle_batch_id=payload.oracle_batch_id,
+        )
+
+
+@app.post(
+    "/agent/human-oracle/behaviors/submit",
+    response_model=HumanOracleBehaviorSubmitResponse,
+)
+def human_oracle_behavior_submit(
+    http_request: Request,
+    payload: HumanOracleBehaviorSubmitRequest,
+) -> dict:
+    """Store one behavior judgment; clients cannot upload result evidence."""
+
+    actor = _human_oracle_actor_from_request(http_request)
+    try:
+        repository = _human_oracle_repository()
+        _load_human_oracle_evidence(repository, payload.oracle_batch_id)
+        state = repository.review_state(payload.oracle_batch_id)
+        if state.projection.active_intent_annotation_count != 30:
+            raise OracleBatchIncomplete(
+                "all 30 intent judgments are required before behavior judgments"
+            )
+        annotation = repository.submit_behavior(
+            BehaviorSubmission(
+                **payload.model_dump(
+                    mode="python",
+                    exclude={"judgment", "reason_code"},
+                ),
+                judgment=BehaviorJudgment(payload.judgment),
+                reason_code=BehaviorReason(payload.reason_code),
+                actor=actor,
+            )
+        )
+        logger.info(
+            "human_oracle_api_completed",
+            extra={
+                "behavior_annotation_id": annotation.behavior_annotation_id,
+                "operation": "behavior_submit",
+                "oracle_batch_id": annotation.oracle_batch_id,
+                "unit_id": annotation.unit_id,
+            },
+        )
+        return {
+            "schema_version": "human-oracle-behavior-api-summary-v1",
+            "behavior_annotation_id": annotation.behavior_annotation_id,
+            "oracle_batch_id": annotation.oracle_batch_id,
+            "unit_id": annotation.unit_id,
+            "case_id": annotation.case_id,
+            "judgment": annotation.judgment,
+            "reason_code": annotation.reason_code,
+            "intent_annotation_id": annotation.intent_annotation_id,
+            "supersedes_annotation_id": annotation.supersedes_annotation_id,
+            "product_relevance_labels_created": (
+                annotation.product_relevance_labels_created
+            ),
+            "root_cause_claimed": annotation.root_cause_claimed,
+        }
+    except OracleInvalidDecision as exc:
+        _raise_human_oracle_invalid_decision(
+            operation="behavior_submit",
+            error=exc,
+            oracle_batch_id=payload.oracle_batch_id,
+            unit_id=payload.unit_id,
+        )
+    except (
+        OracleBatchIncomplete,
+        OracleBatchSealed,
+        OracleClientActionConflict,
+        OracleCompareAndSwapConflict,
+        ValueError,
+        FileNotFoundError,
+    ) as exc:
+        _raise_human_oracle_conflict(
+            operation="behavior_submit",
+            error=exc,
+            oracle_batch_id=payload.oracle_batch_id,
+            unit_id=payload.unit_id,
+        )
+    except (OracleStorageError, OSError) as exc:
+        _raise_human_oracle_unavailable(
+            operation="behavior_submit",
+            error=exc,
+            oracle_batch_id=payload.oracle_batch_id,
+        )
+
+
+@app.post(
+    "/agent/human-oracle/batches/seal",
+    response_model=HumanOracleSealResponse,
+)
+def human_oracle_batch_seal(
+    http_request: Request,
+    payload: HumanOracleSealRequest,
+) -> dict:
+    """Seal complete diagnostic judgments without writing any search strategy."""
+
+    actor = _human_oracle_actor_from_request(http_request)
+    try:
+        repository = _human_oracle_repository()
+        _load_human_oracle_evidence(repository, payload.oracle_batch_id)
+        oracle = repository.seal(
+            SealSubmission(
+                oracle_batch_id=payload.oracle_batch_id,
+                client_action_id=payload.client_action_id,
+                actor=actor,
+            )
+        )
+        logger.info(
+            "human_oracle_api_completed",
+            extra={
+                "operation": "batch_seal",
+                "oracle_batch_id": oracle.oracle_batch_id,
+                "oracle_id": oracle.oracle_id,
+            },
+        )
+        return _human_oracle_seal_response(oracle)
+    except OracleInvalidDecision as exc:
+        _raise_human_oracle_invalid_decision(
+            operation="batch_seal",
+            error=exc,
+            oracle_batch_id=payload.oracle_batch_id,
+        )
+    except (
+        OracleBatchIncomplete,
+        OracleBatchSealed,
+        OracleClientActionConflict,
+        ValueError,
+        FileNotFoundError,
+    ) as exc:
+        _raise_human_oracle_conflict(
+            operation="batch_seal",
+            error=exc,
+            oracle_batch_id=payload.oracle_batch_id,
+        )
+    except (OracleStorageError, OSError) as exc:
+        _raise_human_oracle_unavailable(
+            operation="batch_seal",
+            error=exc,
+            oracle_batch_id=payload.oracle_batch_id,
+        )
+
+
+def _human_oracle_seal_response(oracle: HumanOracleArtifact) -> dict:
+    return {
+        "schema_version": "human-oracle-seal-api-summary-v1",
+        "oracle_id": oracle.oracle_id,
+        "oracle_batch_id": oracle.oracle_batch_id,
+        "diagnostic_id": oracle.diagnostic_id,
+        "synthetic_intent_annotation_count": (oracle.synthetic_intent_annotation_count),
+        "behavior_annotation_count": oracle.behavior_annotation_count,
+        "product_relevance_labels_created": oracle.product_relevance_labels_created,
+        "formal_evaluation_allowed": oracle.formal_evaluation_allowed,
+        "quality_conclusion_allowed": oracle.quality_conclusion_allowed,
+        "root_cause_claimed": oracle.root_cause_claimed,
+        "strategy_write_count": oracle.strategy_write_count,
+        "limitations": oracle.limitations,
+    }
 
 
 @app.get("/agent/strategy/catalog")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import stat
 import time
 import unicodedata
@@ -75,6 +76,7 @@ _FORBIDDEN_AUTHORITY_NAMES = frozenset(
         "strategy-proposals",
     }
 )
+_EXECUTION_ID_RE = re.compile(r"bad-case-execution-[0-9a-f]{32}\Z")
 
 
 def run_bad_case_diagnostics(
@@ -84,13 +86,15 @@ def run_bad_case_diagnostics(
     source_profile: str = "smoke",
     revision_provider: Callable[[Path], str] = require_clean_code_revision,
     search_service: CatalogSearchService | None = None,
+    execution_id: str | None = None,
+    execution_started_at_utc: datetime | None = None,
 ) -> BadCaseRun:
     """Publish evidence only after all 59 bounded searches succeed."""
 
     root = Path(project_root).resolve(strict=True)
     run_root = root / "runs" if artifact_root is None else Path(artifact_root)
-    execution_id = f"bad-case-execution-{new_trace_id()}"
-    started_at = _utc_now()
+    execution_id = _validated_execution_id(execution_id)
+    started_at = _validated_started_at(execution_started_at_utc)
     started = time.perf_counter()
     completed_query_count = 0
     failure_stage = "source_preflight"
@@ -680,3 +684,17 @@ def _elapsed_ms(started: float) -> float:
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _validated_execution_id(value: str | None) -> str:
+    execution_id = f"bad-case-execution-{new_trace_id()}" if value is None else value
+    if type(execution_id) is not str or not _EXECUTION_ID_RE.fullmatch(execution_id):
+        raise ValueError("Bad Case execution ID is invalid")
+    return execution_id
+
+
+def _validated_started_at(value: datetime | None) -> datetime:
+    started_at = value or _utc_now()
+    if not isinstance(started_at, datetime) or started_at.utcoffset() is None:
+        raise ValueError("Bad Case execution start time must include a timezone")
+    return started_at

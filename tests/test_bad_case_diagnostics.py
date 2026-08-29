@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -205,6 +206,64 @@ def test_fixed_batch_builds_replayable_label_blind_evidence(
         == artifact
     )
     assert service.search_call_count == 118
+
+
+def test_supervisor_can_bind_the_execution_id_and_start_time(
+    query_set,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service_for_query_set(query_set, tmp_path)
+    _patch_builder(monkeypatch, query_set)
+    execution_id = "bad-case-execution-" + ("d" * 32)
+    started_at = datetime(2026, 8, 29, 1, 2, 3, tzinfo=UTC)
+
+    run = bad_runner.run_bad_case_diagnostics(
+        project_root=ROOT,
+        artifact_root=tmp_path / "runs",
+        revision_provider=lambda _root: REVISION,
+        search_service=service,
+        execution_id=execution_id,
+        execution_started_at_utc=started_at,
+    )
+
+    assert run.execution.execution_id == execution_id
+    assert run.execution.started_at_utc == started_at
+    stored = json.loads(Path(run.execution_path).read_text(encoding="utf-8"))
+    assert stored["execution_id"] == execution_id
+
+
+@pytest.mark.parametrize(
+    "execution_id",
+    [
+        "",
+        False,
+        "bad-case-execution-short",
+        "bad-case-execution-" + ("A" * 32),
+        7,
+    ],
+)
+def test_supervisor_execution_id_injection_rejects_invalid_values(
+    tmp_path: Path,
+    execution_id,
+) -> None:
+    with pytest.raises(ValueError, match="execution ID"):
+        bad_runner.run_bad_case_diagnostics(
+            project_root=ROOT,
+            artifact_root=tmp_path / "runs",
+            revision_provider=lambda _root: REVISION,
+            execution_id=execution_id,
+        )
+
+
+def test_supervisor_start_time_injection_requires_timezone(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="timezone"):
+        bad_runner.run_bad_case_diagnostics(
+            project_root=ROOT,
+            artifact_root=tmp_path / "runs",
+            revision_provider=lambda _root: REVISION,
+            execution_started_at_utc=datetime(2026, 8, 29),
+        )
 
 
 def test_display_sample_and_trusted_query_tampering_are_rejected(
