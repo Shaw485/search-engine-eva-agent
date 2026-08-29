@@ -73,33 +73,76 @@ sudo cp /var/www/search-engine-eva-agent/deploy/search-engine-eva-agent.service 
 sudo systemctl daemon-reload
 ```
 
-Add all location blocks from `deploy/nginx-search-eval.conf` inside the existing
-HTTPS server block. Before reloading Nginx, create the server-only credential
-file interactively; never put the password or generated hash in Git:
+Install the HTTP-scoped rate-limit definitions and add all location blocks from
+`deploy/nginx-search-eval.conf` inside the existing HTTPS server block. Before
+reloading Nginx, create the server-only credential file interactively; never put
+the password or generated hash in Git or a shell argument:
 
 ```bash
 sudo htpasswd -cB /etc/nginx/.search-agent.htpasswd shaw
 sudo chown root:www-data /etc/nginx/.search-agent.htpasswd
 sudo chmod 0640 /etc/nginx/.search-agent.htpasswd
 sudo -u www-data test -r /etc/nginx/.search-agent.htpasswd
+sudo install -o root -g root -m 0644 \
+  /var/www/search-engine-eva-agent/deploy/nginx-search-agent-rate-limit-http.conf \
+  /etc/nginx/conf.d/search-agent-rate-limit.conf
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-The protected locations use the fixed Basic Auth realm `Search Agent Owner`.
-This realm intentionally differs from the earlier prototype realm `Search
-Agent`, so browsers discard stale cached credentials and present a fresh login
-challenge after this release. Keep the realm identical across the page and all
-owner-only API locations. Change it again only as an explicit cache-reset
-operation because every change forces owners to authenticate again.
+If an Owner password was ever pasted into chat, a ticket, a command argument or
+another non-secret channel, rotate it before enabling the public login shell:
 
-Only `/search-agent.html`, the proposal endpoint, the stage-aware
-`/agent/retrieval/analyze` endpoint, Agent Eval, the Query constructor, the
-59-Query Bad Case endpoint, the diagnostic experiment planner and all seven
-Human Diagnostic Oracle endpoints require this credential. The search
-experience, strategy page, catalog search and approved strategy catalog stay
-public. The exact decision location deliberately returns 404 even with
-credentials; human decisions are owner-only and must use the loopback API.
+```bash
+sudo htpasswd -B /etc/nginx/.search-agent.htpasswd shaw
+```
+
+Enter the replacement only at the interactive prompt. Use a new, high-entropy,
+non-reused password; do not pass it on the command line or record it in a log.
+
+`/search-agent.html` is a public, no-store login shell because embedded browsers
+may not implement native Basic Auth navigation. It contains no private evidence
+and keeps the complete workbench hidden until its in-page form validates the
+Owner credential against the exact `/search-agent-auth-check.json` location.
+The browser holds the equivalent Basic value only in the current page's memory;
+it is never stored in a Cookie, URL, `localStorage` or `sessionStorage`, and it
+is cleared on refresh, close, logout or any `401/403` response.
+
+The auth probe and all 13 data-bearing Agent API locations use the fixed Basic
+Auth realm `Search Agent Owner`. The probe is limited to 5 requests/minute per
+source IP with a burst of 3; Owner APIs are limited to 30 requests/minute with a
+burst of 15. Their `401` result is internally converted to
+a final `403`, so the page can handle rejection instead of navigating into a
+native 401 flow. Some Nginx builds retain a `WWW-Authenticate` response header
+after an `error_page` redirect; the required acceptance signal is the final 403
+status and the target browser remaining on the HTML form. Nginx validates every
+request and clears the Authorization header before proxying. Normal requests do
+not enter an access log. Only rate-limit rejections are written to the dedicated
+safe JSON log described below. Unknown
+`/search-eval-api/agent/*` routes fail closed with `404`; only the exact adopted
+strategy catalog is public. The search experience, strategy page and catalog
+search also stay public. The exact decision location deliberately returns 404
+even with credentials; human decisions are owner-only and must use the loopback
+API.
+
+Every Basic-auth location sends only `crit` events to
+`/var/log/nginx/search-agent-auth-critical.log`. This prevents routine unknown
+user/password-mismatch events—which can contain the submitted username in
+Nginx—from entering production logs while preserving critical Nginx failures.
+Rate-limit responses alone are written to
+`/var/log/nginx/search-agent-auth-rate-limit.log` as structured JSON containing
+timestamp, request ID, source IP, status, method, path and duration. It never
+contains username, Authorization, request body or query parameters. The module
+can be debugged independently with
+`sudo tail -f /var/log/nginx/search-agent-auth-rate-limit.log`; filter with
+`jq 'select(.status == 429)'`. Reuse the host's existing
+`/etc/logrotate.d/nginx` wildcard for rotation; do not add a second stanza that
+matches this file, because logrotate treats that as a `duplicate log entry`.
+Before reload, confirm the wildcard covers `/var/log/nginx/*.log` and run
+`sudo logrotate --debug /etc/logrotate.conf`. Retention, compression and reopen
+semantics then remain identical to the other Nginx logs. Alert on a sustained
+non-zero 429 rate or repeated bursts from one source IP. Verbose auth failure
+logging stays disabled in production.
 The retrieval location has a 130-second read timeout because its bounded
 Runtime policy allows at most 120 seconds. This is a synchronous smoke-only
 bridge; before larger data or concurrent use, replace it with a queued worker,
@@ -203,6 +246,15 @@ curl --request POST 'https://shawspace.cn/search-eval-api/catalog/search' \
 curl --output /dev/null --write-out '%{http_code}\n' \
   'https://shawspace.cn/search-agent.html'
 curl --output /dev/null --write-out '%{http_code}\n' \
+  'https://shawspace.cn/search-agent-auth-check.json'
+curl --user 'invalid-test-owner:invalid-test-only' \
+  --dump-header - --output /dev/null \
+  'https://shawspace.cn/search-agent-auth-check.json'
+curl --user shaw \
+  'https://shawspace.cn/search-agent-auth-check.json'
+curl --output /dev/null --write-out '%{http_code}\n' \
+  'https://shawspace.cn/search-eval-api/agent/unknown-route'
+curl --output /dev/null --write-out '%{http_code}\n' \
   --request POST 'https://shawspace.cn/search-eval-api/agent/strategy/propose' \
   --header 'Content-Type: application/json' \
   --data '{"profile":"smoke"}'
@@ -276,9 +328,13 @@ Acceptance requires:
 
 1. Health reports `catalog.status=ready`, the expected index ID and 1,814,924 products.
 2. English, Spanish, Japanese and exact product-ID checks return valid JSON.
-3. Anonymous requests to the Agent page, proposal endpoint, stage-aware
-   retrieval/Bad Case, diagnostic-plan and Human Oracle endpoints return `401`;
-   authenticated proposal requests return a
+3. Anonymous requests to the Agent page return `200` with the in-page login form
+   and the workbench still hidden. The auth check, proposal, stage-aware
+   retrieval/Bad Case, diagnostic-plan and Human Oracle endpoints return a final
+   `403`; the target browser must stay on the webpage form rather than show a
+   native authentication error. Unknown Agent routes return `404`. The
+   authenticated auth check returns only the fixed schema and boolean,
+   and authenticated proposal requests return a
    pending proposal with baseline Run ID, candidate Run ID, comparison ID,
    aggregate metric deltas and bad-case examples. An authenticated retrieval
    analysis returns all three bounded candidate outcomes, stage metrics, 12 gate
@@ -288,8 +344,10 @@ Acceptance requires:
    validated supervisor receipt containing the 125-second deadline policy and
    TERM/KILL grace. An authenticated, exact-origin Oracle create request returns
    20 clusters/40 candidates/30 intent tasks; missing origin, cross-site or
-   non-JSON requests fail closed. Search and strategy pages remain anonymously
-   accessible.
+   non-JSON requests fail closed. Refreshing or closing the page requires a new
+   login, and no credential appears in Cookie, URL, `localStorage`,
+   `sessionStorage`, browser logs, Nginx access logs or application logs. Search
+   and strategy pages remain anonymously accessible.
 4. The strategy catalog endpoint returns the current approved runtime strategy
    list. It can be empty before the Owner approves a proposal.
 5. The public decision check returns `404`; only a deliberate loopback request
