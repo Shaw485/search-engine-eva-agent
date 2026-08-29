@@ -89,10 +89,19 @@ def generate_retrieval_runtime_analysis(
         "retrieval_runtime_analysis_completed",
         extra={
             "agent_trace_id": terminal.trace_id,
+            "changed_query_example_count": len(analysis["changed_query_examples"]),
             "comparison_id": analysis["comparison_id"],
             "experiment_count": len(analysis["experiments"]),
+            "improvement_example_count": sum(
+                item["outcome"] == "improvement"
+                for item in analysis["changed_query_examples"]
+            ),
             "outcome": terminal.outcome.value,
             "pipeline_run_id": analysis["retrieval_run_id"],
+            "regression_example_count": sum(
+                item["outcome"] == "regression"
+                for item in analysis["changed_query_examples"]
+            ),
             "tool_calls_used": terminal.tool_calls_used,
         },
     )

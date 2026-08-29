@@ -45,6 +45,7 @@ from .contracts import (
 )
 from .errors import AgentToolError
 from .registry import AgentToolRegistry, ToolSpec
+from .retrieval_examples import select_changed_query_examples
 from .stage_diagnosis import StageDiagnosis, diagnose_retrieval_stages
 
 logger = logging.getLogger("search_quality.agent_tools")
@@ -599,6 +600,10 @@ class StageRetrievalTools:
             "candidate_diagnosis": copy.deepcopy(candidate_diagnosis),
             "candidate_diagnosis_id": candidate_diagnosis["diagnosis_id"],
             "candidate_run_id": candidate["run_id"],
+            "changed_query_examples": select_changed_query_examples(
+                experiments,
+                selected_candidate_run_id=candidate["run_id"],
+            ),
             "comparison": copy.deepcopy(comparison),
             "comparison_id": comparison["comparison_id"],
             "diagnosis": copy.deepcopy(diagnosis),
