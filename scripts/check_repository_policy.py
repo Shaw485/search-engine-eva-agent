@@ -16,6 +16,7 @@ SECRET_PATTERNS = {
         rb"(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,})"
     ),
     "OpenAI-style key": re.compile(rb"sk-(?:proj-)?[A-Za-z0-9_-]{20,}"),
+    "Volcengine Ark key": re.compile(rb"ark-[A-Za-z0-9][A-Za-z0-9._-]{19,}"),
     "AWS access key": re.compile(rb"(?:AKIA|ASIA)[A-Z0-9]{16}"),
 }
 

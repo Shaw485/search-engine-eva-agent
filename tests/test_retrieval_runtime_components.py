@@ -57,13 +57,16 @@ def test_action_summary_preserves_a_retry_without_exposing_failed_payload() -> N
     )
 
     assert summary == {
+        "decision_source": "deterministic",
         "evidence_ref": None,
         "failed_gates": [],
         "gate_passed": None,
+        "model_call": None,
         "pipeline_variant": "title-exact-multifield-v1",
         "reason_code": "test_uniform_multifield_fusion",
         "retryable": True,
         "sequence": 2,
+        "selected_option_id": None,
         "status": "failed",
         "tool_name": RUN_CANDIDATE_TOOL,
     }

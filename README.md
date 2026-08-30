@@ -10,8 +10,8 @@ and shows a panel where a human accepts or rejects the strategy update.
 
 ## Project status
 
-**Full-catalog baseline, Stage 2 Harness, a deterministic stage-aware Agent
-Runtime vertical slice, and the first fixed Agent Eval suite: in progress.** The Owner
+**Full-catalog baseline, Stage 2 Harness, an optional LLM stage-aware Agent
+Runtime loop, and the first fixed Agent Eval suite: in progress.** The Owner
 has prioritized an experience milestone: all 1,814,924 official ESCI products
 must first be searchable on the existing portfolio page, while the optimized
 lane remains closed. This product-search track uses a persistent SQLite FTS5
@@ -33,6 +33,12 @@ on observations, enforces budgets and stores an offline-replayable Trace. The
 original trusted-Run comparison task and the stage-aware retrieval task now use
 the same Runtime/Trace/Replay boundary. The exact-boost optimizer remains a
 separate controller and is not represented as a Runtime Trace yet.
+The retrieval task can run either the deterministic control or an optional
+OpenAI/Volcengine Agent Plan provider that chooses one server-generated option
+ID per Observation in a hard-deadline child process. Both providers use fixed
+first-party endpoints and isolated Key namespaces; see
+[ADR-010](docs/adr/010-volcengine-agent-plan-provider.md). The model never
+constructs tool arguments or owns Harness, approval or activation decisions.
 
 Stage 5 now has a fixed 12-task Agent Evaluation Harness with an independent
 static Oracle. It exercises observation-driven branching, one-retry recovery,
@@ -74,11 +80,12 @@ executable experiment specification, not proof that the candidate is better.
 
 A local-only stage-aware Agent task now makes recall, RRF fusion and coarse
 ranking explicit. On the fixed 20-Query fully judged pool it diagnoses the
-baseline, then uses observations to run uniform, conservative and aggressive
+baseline, then can use either a deterministic control or an LLM Planner to run
+uniform, conservative and aggressive
 multi-field RRF candidates under two retrieval-only tool capabilities. Uniform
 fails seven gates, conservative passes all 12, and the bounded aggressive probe
-fails two; the Planner therefore selects conservative and emits
-`proposal_ready`. The complete action/observation path is replay-validated and
+fails two in the recorded deterministic control. The complete action/observation
+path is replay-validated and
 returned to the workbench as a read-only timeline. This result is eligible for
 Owner review only: the endpoint does not approve a strategy, modify the active
 catalog, affect `/catalog/search` or deploy anything.
@@ -93,7 +100,7 @@ locally or a private production artifact root. The public workbench can request
 and inspect proposals; approve/reject remains restricted to the server's
 loopback Owner channel until real authentication exists. The active config does
 not yet change `/catalog/search`. This proves a bounded control/evidence path,
-not completed LLM reasoning or production search quality.
+not LLM decision quality or production search quality.
 
 The optional OpenSearch 3.8.0 adapter, mapping, and Apple Silicon-compatible
 Compose profile are implemented. Live container verification remains pending
@@ -113,6 +120,7 @@ explicit pending integration check, not an implicit fallback or a claimed pass.
 - Agent optimization workflow: [docs/AGENT_OPTIMIZATION_WORKFLOW.md](docs/AGENT_OPTIMIZATION_WORKFLOW.md)
 - Agent optimization strategy: [docs/AGENT_OPTIMIZATION_STRATEGY.md](docs/AGENT_OPTIMIZATION_STRATEGY.md)
 - Agent Runtime decision: [docs/adr/003-agent-runtime-mvp.md](docs/adr/003-agent-runtime-mvp.md)
+- LLM Planner loop decision: [docs/adr/009-llm-retrieval-planner-loop.md](docs/adr/009-llm-retrieval-planner-loop.md)
 - Stage-aware retrieval decision: [docs/adr/004-stage-aware-retrieval-agent.md](docs/adr/004-stage-aware-retrieval-agent.md)
 - Stage-aware Runtime/Trace decision: [docs/adr/005-stage-retrieval-runtime-trace.md](docs/adr/005-stage-retrieval-runtime-trace.md)
 - Stage-aware retrieval smoke evidence: [docs/STAGE_AWARE_RETRIEVAL_REPORT.md](docs/STAGE_AWARE_RETRIEVAL_REPORT.md)
@@ -167,8 +175,8 @@ report under ignored `runs/comparisons/`.
 `make agent-smoke` accepts two already trusted smoke Run IDs, executes the
 deterministic observation-driven Runtime, and stores a Trace under ignored
 `runs/agent-traces/`. See [docs/AGENT_RUNTIME.md](docs/AGENT_RUNTIME.md) for
-Replay, logging filters and the explicit limitations before a real model is
-connected.
+the optional LLM retrieval Planner, safe Key injection, Replay, logging filters
+and current capability limits.
 
 `make agent-eval` runs all 12 fixed Agent-behavior tasks and writes deterministic
 evidence plus a separate execution receipt under ignored `runs/agent-evals/`.
@@ -360,10 +368,12 @@ not presented as full-catalog recall.
 
 ## Next step
 
-Add a small human-reviewed diagnosis Oracle, a stage-aware executor for
-recall/fusion/coarse-rank drop, and a force-terminating worker deadline before a
-model Planner is connected. The current single-stage executor already covers
-all 59 source-bounded cases but cannot establish relevance quality. The Owner
-still needs to complete the Stage 1
+Commit and review the LLM Planner slice, then run its first real-provider smoke
+with an explicit model and server-only Key while recording Token/latency and
+comparing its decisions with the deterministic control. In parallel, complete
+the Human Diagnostic Oracle judgments before treating behavioral candidates as
+confirmed Bad Cases. The current single-stage executor already covers all 59
+source-bounded cases but cannot establish relevance quality. The Owner still
+needs to complete the Stage 1
 data-boundary and Stage 2 metric learning evidence before the 500-Query dev
 profile is explicitly unlocked; frozen test remains unavailable to tuning.

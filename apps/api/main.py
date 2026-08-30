@@ -21,6 +21,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.responses import JSONResponse
 
+from search_quality.agent.llm_retrieval_planner import (
+    LLMPlannerConfigurationError,
+    build_retrieval_planner,
+    load_retrieval_planner_configuration,
+)
 from search_quality.agent.optimization import (
     ActiveStrategyChangedError,
     StrategyProposalRejectedError,
@@ -103,6 +108,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CODE_REVISION_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
 _AGENT_PROPOSAL_LOCK = threading.Lock()
 _AGENT_EVAL_LOCK = threading.Lock()
+_RETRIEVAL_ANALYSIS_LOCK = threading.Lock()
 _BAD_CASE_LOCK = threading.Lock()
 _AGENT_PROPOSAL_CACHE: dict[tuple[str, str, str, str], dict] = {}
 
@@ -260,6 +266,7 @@ async def request_diagnostics(request: Request, call_next):
                 "/agent/strategy/catalog",
                 "/agent/strategy/propose",
                 "/agent/retrieval/analyze",
+                "/agent/retrieval/status",
                 "/agent/eval/run",
                 "/agent/bad-cases/run",
                 "/agent/diagnostic-experiments/plan",
@@ -1170,11 +1177,30 @@ RetrievalGateName = Literal[
 ]
 
 
+class RetrievalModelCallResponse(BaseModel):
+    """One safe model-call receipt; prompts and provider bodies stay private."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    duration_ms: float = Field(ge=0.0, le=120_000.0, allow_inf_nan=False)
+    input_tokens: int = Field(ge=0)
+    model_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,127}$")
+    output_tokens: int = Field(ge=0)
+    total_tokens: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_token_total(self) -> Self:
+        if self.total_tokens != self.input_tokens + self.output_tokens:
+            raise ValueError("model token total is inconsistent")
+        return self
+
+
 class RetrievalAgentActionResponse(BaseModel):
     """One privacy-safe action/observation pair exposed to the workbench."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
+    decision_source: Literal["deterministic", "llm"]
     evidence_ref: str | None = Field(
         default=None,
         pattern=(
@@ -1184,6 +1210,7 @@ class RetrievalAgentActionResponse(BaseModel):
     )
     failed_gates: list[RetrievalGateName] = Field(max_length=12)
     gate_passed: bool | None
+    model_call: RetrievalModelCallResponse | None
     pipeline_variant: (
         Literal[
             "title-exact-multifield-v1",
@@ -1195,6 +1222,15 @@ class RetrievalAgentActionResponse(BaseModel):
     reason_code: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     retryable: bool
     sequence: int = Field(ge=1)
+    selected_option_id: (
+        Literal[
+            "diagnose_baseline",
+            "run_uniform_candidate",
+            "run_conservative_candidate",
+            "run_aggressive_candidate",
+        ]
+        | None
+    )
     status: Literal["succeeded", "failed"]
     tool_name: Literal[
         "diagnose_baseline_retrieval",
@@ -1204,6 +1240,27 @@ class RetrievalAgentActionResponse(BaseModel):
     @model_validator(mode="after")
     def validate_action_observation_pair(self) -> Self:
         is_baseline = self.tool_name == "diagnose_baseline_retrieval"
+        if self.decision_source == "deterministic":
+            if self.selected_option_id is not None or self.model_call is not None:
+                raise ValueError("deterministic action contains model metadata")
+        else:
+            if self.selected_option_id is None or self.model_call is None:
+                raise ValueError("LLM action is missing model metadata")
+            expected_option = (
+                "diagnose_baseline"
+                if is_baseline
+                else {
+                    "title-exact-multifield-v1": "run_uniform_candidate",
+                    "title-exact-multifield-weighted-v1": (
+                        "run_conservative_candidate"
+                    ),
+                    "title-exact-multifield-weighted-aggressive-v1": (
+                        "run_aggressive_candidate"
+                    ),
+                }.get(self.pipeline_variant)
+            )
+            if self.selected_option_id != expected_option:
+                raise ValueError("LLM option does not match the recorded action")
         if is_baseline and self.pipeline_variant is not None:
             raise ValueError("baseline action must not declare a pipeline variant")
         if not is_baseline and self.pipeline_variant is None:
@@ -1233,18 +1290,47 @@ class RetrievalAgentActionResponse(BaseModel):
         return self
 
 
+class RetrievalLLMUsageResponse(BaseModel):
+    """Aggregate model usage for one Trace, including the terminal decision."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    input_tokens: int = Field(ge=0)
+    model_calls: int = Field(ge=1, le=6)
+    model_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,127}$")
+    output_tokens: int = Field(ge=0)
+    prompt_version: Literal["retrieval-choice-prompt-v1"]
+    provider_id: Literal["openai", "volcengine_agent_plan"]
+    terminal_option_id: Literal[
+        "finish_best_passing_candidate",
+        "finish_no_safe_improvement",
+    ]
+    total_tokens: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_token_total(self) -> Self:
+        if self.total_tokens != self.input_tokens + self.output_tokens:
+            raise ValueError("LLM token total is inconsistent")
+        return self
+
+
 class RetrievalAgentRunResponse(BaseModel):
     """Replay-validated Runtime summary; the full Trace remains server-side."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
     actions: list[RetrievalAgentActionResponse] = Field(min_length=1, max_length=6)
+    llm_usage: RetrievalLLMUsageResponse | None
     outcome: Literal["proposal_ready", "no_safe_improvement"]
-    planner_id: Literal["stage-aware-retrieval-planner-v1"]
+    planner_id: Literal[
+        "stage-aware-retrieval-planner-v1",
+        "llm-retrieval-planner-v1",
+    ]
+    planner_mode: Literal["deterministic", "llm"]
     reason_code: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
-    replay_supported: Literal[True]
+    replay_mode: Literal["recorded_trace"]
     runtime_id: Literal["search-agent-runtime-v1"]
-    schema_version: Literal["retrieval-agent-run-summary-v1"]
+    schema_version: Literal["retrieval-agent-run-summary-v2"]
     state: Literal["completed"]
     steps_used: int = Field(ge=1, le=8)
     tool_calls_used: int = Field(ge=1, le=6)
@@ -1270,6 +1356,124 @@ class RetrievalAgentRunResponse(BaseModel):
                 or retry.pipeline_variant != action.pipeline_variant
             ):
                 raise ValueError("failed action retry must preserve action scope")
+        if self.planner_mode == "deterministic":
+            if (
+                self.planner_id != "stage-aware-retrieval-planner-v1"
+                or self.llm_usage is not None
+                or any(
+                    action.decision_source != "deterministic" for action in self.actions
+                )
+            ):
+                raise ValueError("deterministic Runtime metadata is inconsistent")
+            return self
+        if (
+            self.planner_id != "llm-retrieval-planner-v1"
+            or self.llm_usage is None
+            or any(action.decision_source != "llm" for action in self.actions)
+            or self.llm_usage.model_calls != self.steps_used
+        ):
+            raise ValueError("LLM Runtime metadata is inconsistent")
+        if any(
+            action.model_call is None
+            or action.model_call.model_id != self.llm_usage.model_id
+            for action in self.actions
+        ):
+            raise ValueError("LLM action model does not match aggregate usage")
+        action_input = sum(
+            action.model_call.input_tokens
+            for action in self.actions
+            if action.model_call is not None
+        )
+        action_output = sum(
+            action.model_call.output_tokens
+            for action in self.actions
+            if action.model_call is not None
+        )
+        if (
+            action_input > self.llm_usage.input_tokens
+            or action_output > self.llm_usage.output_tokens
+        ):
+            raise ValueError("LLM action usage exceeds the Trace total")
+        expected_terminal = (
+            "finish_best_passing_candidate"
+            if self.outcome == "proposal_ready"
+            else "finish_no_safe_improvement"
+        )
+        if self.llm_usage.terminal_option_id != expected_terminal:
+            raise ValueError("LLM terminal option does not match the outcome")
+        return self
+
+
+class RetrievalAgentPolicyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    max_elapsed_ms: Literal[120_000]
+    max_failures: Literal[1, 3]
+    max_run_creations: Literal[4, 5]
+    max_same_action_attempts: Literal[1, 2]
+    max_steps: Literal[6, 8]
+    max_tool_calls: Literal[4, 6]
+
+
+class RetrievalAgentStatusResponse(BaseModel):
+    """Non-secret capability/configuration status for the Agent workbench."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    model_id: str | None = Field(
+        default=None,
+        pattern=r"^[a-z0-9][a-z0-9._-]{0,127}$",
+    )
+    planner_id: Literal[
+        "stage-aware-retrieval-planner-v1",
+        "llm-retrieval-planner-v1",
+    ]
+    planner_mode: Literal["deterministic", "llm"]
+    policy: RetrievalAgentPolicyResponse
+    provider_id: Literal["openai", "volcengine_agent_plan"] | None
+    runtime_id: Literal["search-agent-runtime-v1"]
+    schema_version: Literal["retrieval-agent-status-v1"]
+    state: Literal["deterministic", "ready", "not_configured"]
+    strategy_write_allowed: Literal[False]
+    tools: list[
+        Literal[
+            "diagnose_baseline_retrieval",
+            "run_retrieval_candidate",
+        ]
+    ] = Field(min_length=2, max_length=2)
+
+    @model_validator(mode="after")
+    def validate_mode(self) -> Self:
+        if self.tools != [
+            "diagnose_baseline_retrieval",
+            "run_retrieval_candidate",
+        ]:
+            raise ValueError("retrieval Agent tool allowlist is invalid")
+        if self.planner_mode == "deterministic":
+            if (
+                self.state != "deterministic"
+                or self.planner_id != "stage-aware-retrieval-planner-v1"
+                or self.provider_id is not None
+                or self.model_id is not None
+                or self.policy.max_steps != 8
+                or self.policy.max_tool_calls != 6
+                or self.policy.max_run_creations != 5
+                or self.policy.max_failures != 3
+                or self.policy.max_same_action_attempts != 2
+            ):
+                raise ValueError("deterministic Agent status is inconsistent")
+        elif (
+            self.state == "deterministic"
+            or self.planner_id != "llm-retrieval-planner-v1"
+            or self.provider_id not in {"openai", "volcengine_agent_plan"}
+            or self.policy.max_steps != 6
+            or self.policy.max_tool_calls != 4
+            or self.policy.max_run_creations != 4
+            or self.policy.max_failures != 1
+            or self.policy.max_same_action_attempts != 1
+            or (self.state == "ready" and self.model_id is None)
+        ):
+            raise ValueError("LLM Agent status is inconsistent")
         return self
 
 
@@ -1538,17 +1742,86 @@ def agent_strategy_propose(request: StrategyProposalRequest) -> dict:
         ) from exc
 
 
+@app.get("/agent/retrieval/status", response_model=RetrievalAgentStatusResponse)
+def agent_retrieval_status() -> dict:
+    """Expose planner readiness and hard policy limits without exposing a key."""
+
+    try:
+        config = load_retrieval_planner_configuration()
+    except LLMPlannerConfigurationError as exc:
+        logger.error(
+            "agent_retrieval_configuration_invalid",
+            extra={"error_code": str(exc)},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "retrieval_agent_configuration_invalid",
+                "message": "Retrieval Agent configuration is invalid",
+                "trace_id": current_trace_id(),
+            },
+        ) from exc
+    llm_mode = config.planner_mode == "llm"
+    return {
+        "model_id": config.model_id,
+        "planner_id": config.planner_id,
+        "planner_mode": config.planner_mode,
+        "policy": {
+            "max_elapsed_ms": 120_000,
+            "max_failures": 1 if llm_mode else 3,
+            "max_run_creations": 4 if llm_mode else 5,
+            "max_same_action_attempts": 1 if llm_mode else 2,
+            "max_steps": 6 if llm_mode else 8,
+            "max_tool_calls": 4 if llm_mode else 6,
+        },
+        "provider_id": config.provider_id,
+        "runtime_id": "search-agent-runtime-v1",
+        "schema_version": "retrieval-agent-status-v1",
+        "state": config.state,
+        "strategy_write_allowed": False,
+        "tools": [
+            "diagnose_baseline_retrieval",
+            "run_retrieval_candidate",
+        ],
+    }
+
+
 @app.post("/agent/retrieval/analyze", response_model=RetrievalAnalysisResponse)
 def agent_retrieval_analyze(request: RetrievalAnalysisRequest) -> dict:
     """Diagnose recall, fusion and coarse-rank evidence before proposing changes."""
 
+    if not _RETRIEVAL_ANALYSIS_LOCK.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "retrieval_analysis_in_progress",
+                "message": "Retrieval analysis is already running",
+                "trace_id": current_trace_id(),
+            },
+        )
     try:
+        config = load_retrieval_planner_configuration()
+        planner = build_retrieval_planner(config)
         return generate_retrieval_runtime_analysis(
             project_root=PROJECT_ROOT,
             artifact_root=_agent_artifact_root(),
             profile_id=request.profile,
             revision_provider=_api_code_revision,
+            planner=planner,
         )
+    except LLMPlannerConfigurationError as exc:
+        logger.error(
+            "agent_retrieval_planner_unavailable",
+            extra={"error_code": str(exc)},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "llm_planner_not_configured",
+                "message": "LLM retrieval Planner is not configured",
+                "trace_id": current_trace_id(),
+            },
+        ) from exc
     except (OSError, RuntimeError, ValueError) as exc:
         trace_id = current_trace_id()
         logger.error(
@@ -1566,6 +1839,8 @@ def agent_retrieval_analyze(request: RetrievalAnalysisRequest) -> dict:
                 "trace_id": trace_id,
             },
         ) from exc
+    finally:
+        _RETRIEVAL_ANALYSIS_LOCK.release()
 
 
 @app.post("/agent/eval/run", response_model=AgentEvalResponse)

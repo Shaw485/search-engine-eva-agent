@@ -22,7 +22,8 @@ stderr. Normal CLI results remain on stdout.
 | `evaluation` | Baseline/Run comparison, validation and artifact storage | `WARNING` |
 | `ranking` | Per-Query Ranker diagnostics | `OFF` |
 | `agent_runtime` | State, policy, budget and terminal lifecycle | `WARNING` |
-| `agent_model` | Planner decision boundary; currently the deterministic fixture | `WARNING` |
+| `agent_model` | Planner option selection, model-call budgets and decision boundary | `WARNING` |
+| `agent_provider` | Isolated provider-worker lifecycle, safe usage counts and stable failures | `WARNING` |
 | `agent_tools` | Allowlisted tool call lifecycle and stable failures | `WARNING` |
 | `agent_trace` | Trace artifact publication | `WARNING` |
 | `agent_replay` | Offline Trace validation and Replay lifecycle | `WARNING` |
@@ -34,6 +35,8 @@ stderr. Normal CLI results remain on stdout.
 | `bad_case_worker` | Isolated child startup, fixed diagnostic execution and terminal envelope | `WARNING` |
 | `diagnostic_experiments` | Trusted diagnostic loading, evidence routing and bounded experiment planning | `WARNING` |
 | `human_oracle` | Owner-only diagnostic batch, blind intent review, behavior replay, CAS and seal | `WARNING` |
+| `launcher_dialog` | Native macOS hidden-input lifecycle and stable validation outcomes | `INFO` locally |
+| `launcher_backend` | Native launcher preflight and fixed loopback backend handoff | `INFO` locally |
 | `retrieval` | Label-blind recall channels, fusion, stage retention and retrieval Runs | `WARNING` |
 | `stage_diagnosis` | Stage evidence validation and bottleneck diagnosis | `WARNING` |
 | `retrieval_analysis` | Bounded experiment orchestration and artifact publication | `WARNING` |
@@ -53,6 +56,8 @@ export SEARCH_LOG_LEVEL_EVALUATION=INFO
 export SEARCH_LOG_LEVEL_RANKING=DEBUG
 export SEARCH_LOG_LEVEL_CATALOG=INFO
 export SEARCH_LOG_LEVEL_AGENT_RUNTIME=DEBUG
+export SEARCH_LOG_LEVEL_AGENT_MODEL=INFO
+export SEARCH_LOG_LEVEL_AGENT_PROVIDER=INFO
 export SEARCH_LOG_LEVEL_AGENT_EVAL=INFO
 export SEARCH_LOG_LEVEL_QUERY_CONSTRUCTOR=INFO
 export SEARCH_LOG_LEVEL_BAD_CASE=INFO
@@ -60,6 +65,8 @@ export SEARCH_LOG_LEVEL_BAD_CASE_SUPERVISOR=INFO
 export SEARCH_LOG_LEVEL_BAD_CASE_WORKER=INFO
 export SEARCH_LOG_LEVEL_DIAGNOSTIC_EXPERIMENTS=INFO
 export SEARCH_LOG_LEVEL_HUMAN_ORACLE=INFO
+export SEARCH_LOG_LEVEL_LAUNCHER_DIALOG=INFO
+export SEARCH_LOG_LEVEL_LAUNCHER_BACKEND=INFO
 export SEARCH_LOG_LEVEL_RETRIEVAL=DEBUG
 export SEARCH_LOG_LEVEL_RETRIEVAL_ANALYSIS=INFO
 export SEARCH_LOG_LEVEL_STAGE_DIAGNOSIS=INFO
@@ -130,6 +137,19 @@ SEARCH_LOG_LEVEL=OFF SEARCH_LOG_LEVEL_EVALUATION=DEBUG \
   make eval-baseline 2>evaluation-only.jsonl
 ```
 
+The macOS Agent Plan launcher has two independently filtered, structured
+stderr modules. For example, use
+`SEARCH_LOG_LEVEL_LAUNCHER_DIALOG=OFF` to suppress dialog lifecycle events or
+`SEARCH_LOG_LEVEL_LAUNCHER_BACKEND=DEBUG` to isolate backend handoff metadata.
+It emits only timestamps, trace IDs, attempts, fixed provider/model/host/port
+and stable error codes. It never emits the Key, its prefix/length/digest,
+parent environment, command environment, AppKit field contents or provider
+responses. These local events remain in the launching Terminal; the launcher
+does not create a persistent log. Uvicorn and Agent modules retain their own
+independent levels after the native child directly hands off to the backend;
+the Key-free wrapper waits only to clean up the temporary helper at process
+exit.
+
 ## Event fields
 
 JSON events include:
@@ -183,8 +203,18 @@ Agent diagnostic events include safe task/Trace IDs, state, step, tool name,
 duration, outcome and stable error codes. They never include action arguments,
 raw Query text, product fields, observation/report payloads, filesystem paths,
 provider prompts/responses or exception messages. `agent_runtime`,
-`agent_model`, `agent_tools`, `agent_trace` and `agent_replay` can each be
+`agent_model`, `agent_provider`, `agent_tools`, `agent_trace` and `agent_replay` can each be
 enabled without enabling the others.
+
+The optional LLM Planner records only the allowlisted option ID, model ID,
+provider ID (`openai` or `volcengine_agent_plan`), call/Token counts, duration
+and stable failure code. The disposable provider worker never logs either
+provider's API Key, Prompt, provider response, function arguments,
+Authorization header or third-party exception message. Trace stores the same
+bounded provenance plus a digest of the provider response ID; it does not store
+free-form reasoning or chain-of-thought. Authentication debugging must use the
+stable provider error code and configured provider ID; never add a Key prefix,
+length, digest, response body or provider exception text to logs.
 
 Strategy proposal and bounded-search events use the independently controlled
 `agent_optimization` module. Production enables it at `INFO` while keeping
@@ -227,9 +257,11 @@ explicit unsupported proposal request is a debug-level
 contract failures—including unexpected `ValueError`—emit the privacy-safe
 ERROR event `agent_strategy_proposal_failed` and return a generic HTTP 503.
 
-The stage-aware retrieval slice uses five independently controlled modules.
+The stage-aware retrieval slice uses seven independently controlled modules.
 `agent_runtime` records the bounded task lifecycle and terminal outcome;
-`agent_tools` records the two allowlisted retrieval-tool boundaries. Both use
+`agent_model` records the selected finite option and model-call budget, while
+`agent_provider` records the isolated worker/provider lifecycle.
+`agent_tools` records the two allowlisted retrieval-tool boundaries. They use
 only Trace/evidence IDs, tool names, profile, counts, stable reason/error codes
 and pipeline variants. They never log tool arguments or observation payloads.
 The retrieval Runtime completion/failure bridge includes `agent_trace_id` while
@@ -248,6 +280,16 @@ only the number of changed Query examples split into improvement and regression;
 the protected workbench examples themselves remain private evidence. None logs raw Query text,
 product identifiers, titles, labels,
 ranked lists, filesystem paths or exception messages.
+
+Those two data planes must remain distinct when diagnosing an LLM run. Apart
+from fixed instructions/schema and call metadata, the OpenAI or Volcengine
+model evidence input receives only aggregate Observation counts, deltas, gates
+and risk rates; the Key is used only for authentication. The authenticated
+local API can return `changed_query_examples` with Query/product/result details
+for human review, but the application must never log them or copy them into a
+provider model input. Filter `agent_provider` by the provider ID and model to
+inspect the network boundary; inspect the protected local evidence artifact,
+not provider logs, when a changed example is needed.
 
 The corresponding JSON under `retrieval-runs/`, `stage-diagnoses/` and
 `retrieval-comparisons/` is private evidence, not a sanitized log. It may
@@ -361,53 +403,60 @@ systemd-analyze cat-config systemd/journald.conf
    one without exposing its filesystem path.
 7. `agent_runtime`: run `make agent-smoke` with only
    `agent_runtime=DEBUG`; filter by `trace_id`, `state` and `step`.
-8. `agent_model`: enable only `agent_model=DEBUG` to see decision boundaries
-   without tool payloads. The current source is the deterministic fixture.
-9. `agent_tools`: enable only `agent_tools=DEBUG`; filter by `tool_name` and
+8. `agent_model`: enable only `agent_model=DEBUG` to see deterministic or LLM
+   decision boundaries, selected option IDs and budget state without prompts or
+   tool payloads.
+9. `agent_provider`: enable only `agent_provider=DEBUG`; filter by `model`,
+   `provider`, `option_id` and stable `error_code` to distinguish worker
+   startup, provider rejection and hard timeout. Never add Prompt/response
+   logging while debugging authentication; verify the selected provider uses
+   its own Key variable, then rotate the Key if needed. A Volcengine
+   authentication failure must not be retried with the OpenAI Key or endpoint.
+10. `agent_tools`: enable only `agent_tools=DEBUG`; filter by `tool_name` and
    `error_code`. Inspect the Trace, not logs, when evidence payloads are needed.
-10. `agent_trace`: enable only `agent_trace=INFO` to confirm immutable Trace
+11. `agent_trace`: enable only `agent_trace=INFO` to confirm immutable Trace
     publication. Enable only `agent_replay` when isolating schema, hash, state
     or report-validation failures during offline Replay.
-11. `agent_optimization`: enable only `agent_optimization=INFO` while calling
+12. `agent_optimization`: enable only `agent_optimization=INFO` while calling
     `/agent/strategy/propose`, `/agent/strategy/decision` or
     `/agent/strategy/catalog`; locally inspect `runs/strategy-proposals/`,
     `runs/strategy-decisions/` and `runs/search-strategies/`. In production,
     inspect the corresponding subdirectories below
     `/var/lib/search-engine-eva-agent/runtime/` as an authorized operator.
-12. `retrieval`: enable only `retrieval=DEBUG` while calling
+13. `retrieval`: enable only `retrieval=DEBUG` while calling
     `/agent/retrieval/analyze`; filter by `pipeline_run_id`, `pipeline_id` or
     `channel_id`. Inspect the private Run only when stage rankings are required.
-13. `stage_diagnosis`: enable only `stage_diagnosis=INFO`; filter by
+14. `stage_diagnosis`: enable only `stage_diagnosis=INFO`; filter by
     `diagnosis_id` or `pipeline_run_id` to isolate diagnosis from the per-Query
     retrieval work.
-14. `retrieval_analysis`: enable only `retrieval_analysis=INFO`; filter by
+15. `retrieval_analysis`: enable only `retrieval_analysis=INFO`; filter by
     `comparison_id`, `candidate_run_id` or `pipeline_run_id` to inspect bounded
     experiment publication without enabling either retrieval or diagnosis logs.
     The current `/agent/retrieval/analyze` entry is orchestrated by
     `agent_runtime`; enable `agent_runtime=INFO,agent_tools=INFO` to isolate the
     ordered Agent/tool boundaries, then enable `retrieval` or `stage_diagnosis`
     only when the lower-level search stage is the suspected fault.
-15. `agent_eval`: run `make agent-eval` with only `agent_eval=INFO`; filter by
+16. `agent_eval`: run `make agent-eval` with only `agent_eval=INFO`; filter by
     `suite_id`, `task_id` or `evidence_id`. Enable `agent_runtime` or
     `agent_replay` separately only when that boundary is under investigation.
     Detailed Trace evidence remains private.
-16. `query_constructor`: run `make query-set-smoke` with only
+17. `query_constructor`: run `make query-set-smoke` with only
     `query_constructor=INFO`; filter by `query_set_id`. Inspect the private
     artifact for case text; logs deliberately expose only counts and hashes.
-17. `bad_case`: run `make bad-cases-smoke` with only `bad_case=DEBUG`; filter by
+18. `bad_case`: run `make bad-cases-smoke` with only `bad_case=DEBUG`; filter by
     `execution_id`, `diagnostic_id`, `failure_stage` and
     `completed_query_count`. Search text, product IDs/titles and exception
     messages never enter logs. Enable `catalog=INFO` separately to inspect the
     59-call boundary and interruptible SQL timing.
-18. `bad_case_supervisor`: enable only this module and filter by `execution_id`
+19. `bad_case_supervisor`: enable only this module and filter by `execution_id`
     or supervisor `receipt_id` to distinguish dispatch, hard deadline,
     TERM/KILL escalation and durable completion. Enable `bad_case_worker`
     separately only when child startup or envelope production is suspect.
-19. `diagnostic_experiments`: enable only this module while requesting a plan;
+20. `diagnostic_experiments`: enable only this module while requesting a plan;
     filter by `diagnostic_id`, `query_set_id`, `experiment_plan_id` or the
     allowlisted `strategy_id`. Inspect the private evidence artifacts when the
     plan details are required; they are intentionally absent from logs.
-20. `human_oracle`: enable only this module while creating/reviewing one batch;
+21. `human_oracle`: enable only this module while creating/reviewing one batch;
     filter by `oracle_batch_id`, `unit_id` or annotation ID. Inspect the private
     Oracle directories for immutable state. Reproduce intent-view, behavior
     replay, CAS conflict and seal independently; never export transient raw

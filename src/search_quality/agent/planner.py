@@ -27,6 +27,7 @@ class PlannerView:
     observations: tuple[ToolObservation, ...]
     steps_used: int
     tool_calls_used: int
+    remaining_ms: int = 0
 
 
 class Planner(Protocol):

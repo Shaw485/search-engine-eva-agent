@@ -30,14 +30,25 @@ def validate_action_scope(
     """Keep every identifier-bearing action inside the current comparison task."""
 
     if isinstance(task, RetrievalOptimizationTask):
-        from .retrieval_planner import expected_retrieval_decision
+        observed_items = tuple(observations)
+        if task.decision_policy == "adaptive_llm_v1":
+            from .retrieval_policy import option_for_adaptive_decision
 
-        try:
-            expected = expected_retrieval_decision(task, tuple(observations))
-        except (TypeError, ValueError) as exc:
-            raise AgentPolicyError("retrieval_history_invalid") from exc
-        if not isinstance(expected, ToolAction) or action != expected:
-            raise AgentPolicyError("retrieval_action_outside_task_scope")
+            try:
+                option = option_for_adaptive_decision(task, observed_items, action)
+            except (TypeError, ValueError) as exc:
+                raise AgentPolicyError("retrieval_action_outside_task_scope") from exc
+            if not isinstance(option.decision, ToolAction):
+                raise AgentPolicyError("retrieval_action_outside_task_scope")
+        else:
+            from .retrieval_planner import expected_retrieval_decision
+
+            try:
+                expected = expected_retrieval_decision(task, observed_items)
+            except (TypeError, ValueError) as exc:
+                raise AgentPolicyError("retrieval_history_invalid") from exc
+            if not isinstance(expected, ToolAction) or action != expected:
+                raise AgentPolicyError("retrieval_action_outside_task_scope")
         return
 
     arguments = action.arguments
@@ -75,16 +86,30 @@ def validate_finish_grounding(
 
     cited = tuple(successful_by_ref[ref] for ref in decision.evidence_refs)
     if isinstance(task, RetrievalOptimizationTask):
-        from .retrieval_planner import validate_retrieval_plan_semantics
+        if task.decision_policy == "adaptive_llm_v1":
+            from .retrieval_policy import option_for_adaptive_decision
 
-        try:
-            validate_retrieval_plan_semantics(
-                task,
-                tuple(observed_items),
-                decision,
-            )
-        except (TypeError, ValueError) as exc:
-            raise AgentPolicyError("retrieval_finish_not_grounded") from exc
+            try:
+                option = option_for_adaptive_decision(
+                    task,
+                    tuple(observed_items),
+                    decision,
+                )
+            except (TypeError, ValueError) as exc:
+                raise AgentPolicyError("retrieval_finish_not_grounded") from exc
+            if not isinstance(option.decision, FinishDecision):
+                raise AgentPolicyError("retrieval_finish_not_grounded")
+        else:
+            from .retrieval_planner import validate_retrieval_plan_semantics
+
+            try:
+                validate_retrieval_plan_semantics(
+                    task,
+                    tuple(observed_items),
+                    decision,
+                )
+            except (TypeError, ValueError) as exc:
+                raise AgentPolicyError("retrieval_finish_not_grounded") from exc
         return
 
     comparisons: list[ToolObservation] = []

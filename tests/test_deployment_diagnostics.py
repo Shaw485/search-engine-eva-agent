@@ -13,6 +13,17 @@ def _nginx_location(config: str, location: str) -> str:
     return match.group("body")
 
 
+def _assert_owner_rate_limit(location: str, *, login_probe: bool = False) -> None:
+    zone = "search_agent_login" if login_probe else "search_agent_owner_api"
+    burst = 3 if login_probe else 15
+    assert f"limit_req zone={zone} burst={burst} nodelay;" in location
+    assert "limit_req_status 429;" in location
+    assert (
+        "access_log /var/log/nginx/search-agent-auth-rate-limit.log "
+        "search_agent_auth_limit if=$search_agent_auth_rate_limited;"
+    ) in location
+
+
 def test_all_documented_uvicorn_entry_points_disable_access_logs() -> None:
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     service = (ROOT / "deploy/search-engine-eva-agent.service").read_text(
@@ -34,11 +45,18 @@ def test_proxy_disables_request_line_access_log() -> None:
     assert "proxy_pass" not in decision
 
 
-def test_agent_page_and_analysis_endpoints_require_basic_auth() -> None:
+def test_agent_login_shell_is_public_but_auth_probe_and_analysis_are_owner_only() -> (
+    None
+):
     nginx = (ROOT / "deploy/nginx-search-eval.conf").read_text(encoding="utf-8")
     agent_page = _nginx_location(nginx, "= /search-agent.html")
+    auth_check = _nginx_location(nginx, "= /search-agent-auth-check.json")
+    auth_failure = _nginx_location(nginx, "= /__search-agent-auth-failed")
     proposal = _nginx_location(nginx, "= /search-eval-api/agent/strategy/propose")
     retrieval = _nginx_location(nginx, "= /search-eval-api/agent/retrieval/analyze")
+    retrieval_status = _nginx_location(
+        nginx, "= /search-eval-api/agent/retrieval/status"
+    )
     agent_eval = _nginx_location(nginx, "= /search-eval-api/agent/eval/run")
     query_constructor = _nginx_location(
         nginx, "= /search-eval-api/agent/query-constructor/build"
@@ -48,29 +66,78 @@ def test_agent_page_and_analysis_endpoints_require_basic_auth() -> None:
         nginx, "= /search-eval-api/agent/diagnostic-experiments/plan"
     )
 
-    assert 'auth_basic "Search Agent Owner";' in agent_page
-    assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in agent_page
+    assert "auth_basic off;" in agent_page
+    assert "auth_basic_user_file" not in agent_page
     assert 'add_header Cache-Control "no-store" always;' in agent_page
+    assert "Content-Security-Policy" in agent_page
+    assert "connect-src 'self'" in agent_page
+    assert "frame-ancestors 'none'" in agent_page
+    assert 'add_header Referrer-Policy "no-referrer" always;' in agent_page
+    assert 'add_header X-Content-Type-Options "nosniff" always;' in agent_page
     assert "try_files $uri =404;" in agent_page
 
+    assert 'auth_basic "Search Agent Owner";' in auth_check
+    _assert_owner_rate_limit(auth_check, login_probe=True)
+    assert "error_log /var/log/nginx/search-agent-auth-critical.log crit;" in (
+        auth_check
+    )
+    assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in auth_check
+    assert "error_page 401 =403 /__search-agent-auth-failed;" in auth_check
+    assert 'add_header Cache-Control "no-store" always;' in auth_check
+    assert "try_files $uri =404;" in auth_check
+    assert "internal;" in auth_failure
+    assert "auth_basic off;" in auth_failure
+    assert "return 403;" in auth_failure
+
     assert 'auth_basic "Search Agent Owner";' in proposal
+    _assert_owner_rate_limit(proposal)
+    assert "error_log /var/log/nginx/search-agent-auth-critical.log crit;" in proposal
     assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in proposal
     assert "proxy_pass http://127.0.0.1:8010/agent/strategy/propose;" in proposal
     assert 'proxy_set_header Authorization "";' in proposal
+    assert "error_page 401 =403 /__search-agent-auth-failed;" in proposal
+    assert 'add_header Cache-Control "no-store" always;' in proposal
 
     assert 'auth_basic "Search Agent Owner";' in retrieval
+    _assert_owner_rate_limit(retrieval)
+    assert "error_log /var/log/nginx/search-agent-auth-critical.log crit;" in retrieval
     assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in retrieval
     assert "proxy_pass http://127.0.0.1:8010/agent/retrieval/analyze;" in retrieval
     assert 'proxy_set_header Authorization "";' in retrieval
+    assert "error_page 401 =403 /__search-agent-auth-failed;" in retrieval
+    assert 'add_header Cache-Control "no-store" always;' in retrieval
     assert "proxy_read_timeout 130s;" in retrieval
 
+    assert 'auth_basic "Search Agent Owner";' in retrieval_status
+    _assert_owner_rate_limit(retrieval_status)
+    assert (
+        "error_log /var/log/nginx/search-agent-auth-critical.log crit;"
+        in retrieval_status
+    )
+    assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in retrieval_status
+    assert (
+        "proxy_pass http://127.0.0.1:8010/agent/retrieval/status;" in retrieval_status
+    )
+    assert 'proxy_set_header Authorization "";' in retrieval_status
+    assert "error_page 401 =403 /__search-agent-auth-failed;" in retrieval_status
+    assert 'add_header Cache-Control "no-store" always;' in retrieval_status
+    assert "proxy_read_timeout 15s;" in retrieval_status
+
     assert 'auth_basic "Search Agent Owner";' in agent_eval
+    _assert_owner_rate_limit(agent_eval)
+    assert "error_log /var/log/nginx/search-agent-auth-critical.log crit;" in agent_eval
     assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in agent_eval
     assert "proxy_pass http://127.0.0.1:8010/agent/eval/run;" in agent_eval
     assert 'proxy_set_header Authorization "";' in agent_eval
+    assert "error_page 401 =403 /__search-agent-auth-failed;" in agent_eval
+    assert 'add_header Cache-Control "no-store" always;' in agent_eval
     assert "proxy_read_timeout 130s;" in agent_eval
 
     assert 'auth_basic "Search Agent Owner";' in query_constructor
+    _assert_owner_rate_limit(query_constructor)
+    assert "error_log /var/log/nginx/search-agent-auth-critical.log crit;" in (
+        query_constructor
+    )
     assert (
         "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in query_constructor
     )
@@ -79,16 +146,25 @@ def test_agent_page_and_analysis_endpoints_require_basic_auth() -> None:
         in query_constructor
     )
     assert 'proxy_set_header Authorization "";' in query_constructor
+    assert "error_page 401 =403 /__search-agent-auth-failed;" in query_constructor
+    assert 'add_header Cache-Control "no-store" always;' in query_constructor
     assert "proxy_read_timeout 15s;" in query_constructor
 
     assert 'auth_basic "Search Agent Owner";' in bad_cases
+    _assert_owner_rate_limit(bad_cases)
+    assert "error_log /var/log/nginx/search-agent-auth-critical.log crit;" in bad_cases
     assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in bad_cases
     assert "proxy_pass http://127.0.0.1:8010/agent/bad-cases/run;" in bad_cases
     assert 'proxy_set_header Authorization "";' in bad_cases
+    assert "error_page 401 =403 /__search-agent-auth-failed;" in bad_cases
     assert "proxy_read_timeout 140s;" in bad_cases
     assert 'add_header Cache-Control "no-store" always;' in bad_cases
 
     assert 'auth_basic "Search Agent Owner";' in diagnostic_plan
+    _assert_owner_rate_limit(diagnostic_plan)
+    assert "error_log /var/log/nginx/search-agent-auth-critical.log crit;" in (
+        diagnostic_plan
+    )
     assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in (
         diagnostic_plan
     )
@@ -97,6 +173,7 @@ def test_agent_page_and_analysis_endpoints_require_basic_auth() -> None:
         in diagnostic_plan
     )
     assert 'proxy_set_header Authorization "";' in diagnostic_plan
+    assert "error_page 401 =403 /__search-agent-auth-failed;" in diagnostic_plan
     assert 'add_header Cache-Control "no-store" always;' in diagnostic_plan
 
 
@@ -116,15 +193,75 @@ def test_human_oracle_routes_are_exact_owner_only_and_strip_credentials() -> Non
         external = f"= /search-eval-api/agent/human-oracle/{suffix}"
         internal = f"http://127.0.0.1:8010/agent/human-oracle/{suffix};"
         location = _nginx_location(nginx, external)
-        assert "access_log off;" in location
+        _assert_owner_rate_limit(location)
         assert 'auth_basic "Search Agent Owner";' in location
+        assert "error_log /var/log/nginx/search-agent-auth-critical.log crit;" in (
+            location
+        )
         assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in location
+        assert "error_page 401 =403 /__search-agent-auth-failed;" in location
         assert 'add_header Cache-Control "no-store" always;' in location
         assert f"proxy_pass {internal}" in location
         assert "proxy_set_header X-Search-Owner-Principal $remote_user;" in location
         assert 'proxy_set_header Authorization "";' in location
         expected_timeout = "40s" if suffix == "behaviors/view" else "15s"
         assert f"proxy_read_timeout {expected_timeout};" in location
+
+
+def test_owner_auth_rate_limits_and_safe_rejection_log_are_http_scoped() -> None:
+    http_config = (ROOT / "deploy/nginx-search-agent-rate-limit-http.conf").read_text(
+        encoding="utf-8"
+    )
+    deployment = (ROOT / "docs/DEPLOYMENT.md").read_text(encoding="utf-8")
+
+    assert (
+        "limit_req_zone $binary_remote_addr zone=search_agent_login:10m rate=5r/m;"
+        in http_config
+    )
+    assert (
+        "limit_req_zone $binary_remote_addr "
+        "zone=search_agent_owner_api:10m rate=30r/m;" in http_config
+    )
+    assert "map $status $search_agent_auth_rate_limited" in http_config
+    assert "log_format search_agent_auth_limit escape=json" in http_config
+    for forbidden in ("$remote_user", "$http_authorization", "$request_body", "$args"):
+        assert forbidden not in http_config
+    for safe_field in (
+        '"timestamp"',
+        '"request_id"',
+        '"status"',
+        '"method"',
+        '"uri"',
+        '"request_time"',
+    ):
+        assert safe_field in http_config
+    assert "/var/log/nginx/search-agent-auth-rate-limit.log" in deployment
+    assert "/etc/logrotate.d/nginx" in deployment
+    assert "duplicate log entry" in deployment
+    assert "logrotate --debug /etc/logrotate.conf" in deployment
+
+
+def test_public_strategy_catalog_is_exact_and_unknown_agent_routes_fail_closed() -> (
+    None
+):
+    nginx = (ROOT / "deploy/nginx-search-eval.conf").read_text(encoding="utf-8")
+    catalog = _nginx_location(nginx, "= /search-eval-api/agent/strategy/catalog")
+    fallback = _nginx_location(nginx, "^~ /search-eval-api/agent/")
+    bare_agent = _nginx_location(nginx, "= /search-eval-api/agent")
+
+    assert "access_log off;" in catalog
+    assert "auth_basic off;" in catalog
+    assert "auth_basic_user_file" not in catalog
+    assert "proxy_pass http://127.0.0.1:8010/agent/strategy/catalog;" in catalog
+    assert 'proxy_set_header Authorization "";' in catalog
+    assert "access_log off;" in fallback
+    assert "auth_basic off;" in fallback
+    assert "proxy_pass" not in fallback
+    assert "return 404;" in fallback
+    assert "access_log off;" in bare_agent
+    assert "auth_basic off;" in bare_agent
+    assert "proxy_pass" not in bare_agent
+    assert "return 404;" in bare_agent
 
 
 def test_catalog_artifact_is_read_only_and_configured_for_service_user() -> None:

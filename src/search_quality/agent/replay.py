@@ -10,6 +10,7 @@ from search_quality.observability import logging_context
 from .contracts import (
     AgentState,
     FinishDecision,
+    PlannerDecisionAudit,
     RetrievalOptimizationTask,
     TerminalOutcome,
     ToolAction,
@@ -74,6 +75,7 @@ class TraceReplayer:
                 pending_tool_name: str | None = None
                 pending_scope_error: str | None = None
                 pending_registry_error: str | None = None
+                llm_audit_binding: tuple[str, ...] | None = None
                 action_count = 0
                 for expected_sequence, event in enumerate(trace.events, start=1):
                     if event.sequence != expected_sequence:
@@ -83,7 +85,11 @@ class TraceReplayer:
                             "trace_hash_mismatch", "Trace hash chain is broken"
                         )
                     payload = event.model_dump(mode="json", exclude={"event_hash"})
-                    if compute_event_hash(payload) != event.event_hash:
+                    valid_event_hashes = {compute_event_hash(payload)}
+                    if payload.get("planner_audit") is None:
+                        payload.pop("planner_audit", None)
+                        valid_event_hashes.add(compute_event_hash(payload))
+                    if event.event_hash not in valid_event_hashes:
                         raise AgentReplayError(
                             "trace_hash_mismatch", "Trace event hash does not match"
                         )
@@ -96,6 +102,27 @@ class TraceReplayer:
                     )
                     if transition not in ALLOWED_TRANSITIONS:
                         raise ValueError("Trace contains an invalid state transition")
+                    planner_audit = None
+                    if event.planner_audit is not None:
+                        if event.event_type not in {
+                            "action_selected",
+                            "run_completed",
+                        }:
+                            raise ValueError(
+                                "Trace Planner audit is attached to a non-decision event"
+                            )
+                        planner_audit = PlannerDecisionAudit.model_validate(
+                            event.planner_audit,
+                            strict=True,
+                        )
+                    if (
+                        trace.planner_id == "llm-retrieval-planner-v1"
+                        and event.event_type in {"action_selected", "run_completed"}
+                        and planner_audit is None
+                    ):
+                        raise ValueError(
+                            "LLM Trace decision is missing its audit record"
+                        )
                     is_terminal_event = event.event_type in {
                         "run_completed",
                         "run_failed",
@@ -121,6 +148,13 @@ class TraceReplayer:
                         if pending_tool_name is not None:
                             raise ValueError("Trace action has no observation")
                         action = ToolAction.model_validate(event.decision)
+                        llm_audit_binding = self._validate_llm_option_binding(
+                            trace=trace,
+                            observations=tuple(observations),
+                            decision=action,
+                            audit=planner_audit,
+                            expected_binding=llm_audit_binding,
+                        )
                         pending_tool_name = action.tool_name
                         if action.tool_name not in trace.tool_names:
                             pending_registry_error = "tool_not_allowed"
@@ -203,6 +237,21 @@ class TraceReplayer:
                     if terminal_state != AgentState.COMPLETED:
                         raise ValueError("Trace completion state does not match")
                     decision = FinishDecision.model_validate(terminal_event.decision)
+                    terminal_audit = (
+                        PlannerDecisionAudit.model_validate(
+                            terminal_event.planner_audit,
+                            strict=True,
+                        )
+                        if terminal_event.planner_audit is not None
+                        else None
+                    )
+                    llm_audit_binding = self._validate_llm_option_binding(
+                        trace=trace,
+                        observations=tuple(observations),
+                        decision=decision,
+                        audit=terminal_audit,
+                        expected_binding=llm_audit_binding,
+                    )
                     if (
                         decision.outcome != trace.terminal.outcome
                         or decision.reason_code != trace.terminal.reason_code
@@ -322,3 +371,45 @@ class TraceReplayer:
                 },
             )
             return trace
+
+    @staticmethod
+    def _validate_llm_option_binding(
+        *,
+        trace: AgentTrace,
+        observations: tuple[ToolObservation, ...],
+        decision: ToolAction | FinishDecision,
+        audit: PlannerDecisionAudit | None,
+        expected_binding: tuple[str, ...] | None,
+    ) -> tuple[str, ...] | None:
+        if trace.planner_id != "llm-retrieval-planner-v1":
+            if audit is not None:
+                raise ValueError("Non-LLM Trace contains LLM Planner audit data")
+            return None
+        if audit is None or not isinstance(trace.task, RetrievalOptimizationTask):
+            raise ValueError("LLM Trace decision audit is malformed")
+        from .retrieval_policy import derive_adaptive_retrieval_options
+
+        options = derive_adaptive_retrieval_options(trace.task, observations)
+        if audit.option_count != len(options):
+            raise ValueError("LLM Trace option count does not replay")
+        matching = [option for option in options if option.decision == decision]
+        if len(matching) != 1:
+            raise ValueError("retrieval decision is outside the adaptive option set")
+        option = matching[0]
+        if option.option_id != audit.selected_option_id:
+            raise ValueError("LLM Trace option does not match its canonical decision")
+        binding = (
+            audit.schema_version,
+            audit.source,
+            audit.provider_id,
+            audit.model_id,
+            audit.prompt_version,
+            audit.decision_schema_version,
+            audit.data_policy,
+            audit.planner_config_sha256,
+        )
+        if expected_binding is not None and binding != expected_binding:
+            raise ValueError(
+                "LLM Trace Planner configuration changes between decisions"
+            )
+        return binding

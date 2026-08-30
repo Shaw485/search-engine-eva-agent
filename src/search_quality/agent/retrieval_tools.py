@@ -808,6 +808,9 @@ class StageRetrievalTools:
             "uniform_candidate_passed": RETRIEVAL_PIPELINE_VARIANTS[0],
             "conservative_candidate_selected": RETRIEVAL_PIPELINE_VARIANTS[1],
             "aggressive_candidate_selected": RETRIEVAL_PIPELINE_VARIANTS[2],
+            "llm_uniform_candidate_selected": RETRIEVAL_PIPELINE_VARIANTS[0],
+            "llm_conservative_candidate_selected": RETRIEVAL_PIPELINE_VARIANTS[1],
+            "llm_aggressive_candidate_selected": RETRIEVAL_PIPELINE_VARIANTS[2],
         }
         selected_variant = reason_to_variant.get(terminal.reason_code)
         if terminal.outcome == TerminalOutcome.PROPOSAL_READY:

@@ -16,6 +16,7 @@ from search_quality.evaluation.artifacts import write_immutable_text
 from .contracts import (
     AgentDecision,
     AgentState,
+    PlannerDecisionAudit,
     RuntimeTask,
     StrictModel,
     TerminalResult,
@@ -47,6 +48,7 @@ class TraceEvent(StrictModel):
     ]
     state_after: AgentState
     decision: dict[str, Any] | None = None
+    planner_audit: dict[str, Any] | None = None
     observation: dict[str, Any] | None = None
     duration_ms: StrictFloat = Field(ge=0.0)
     context_sha256: StrictStr | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
@@ -134,6 +136,7 @@ class TraceRecorder:
         event_type: str,
         state_after: AgentState,
         decision: AgentDecision | None = None,
+        planner_audit: PlannerDecisionAudit | None = None,
         observation: ToolObservation | None = None,
         terminal: TerminalResult | None = None,
         duration_ms: float = 0.0,
@@ -152,6 +155,11 @@ class TraceRecorder:
             "observation": (
                 observation.model_dump(mode="json") if observation is not None else None
             ),
+            "planner_audit": (
+                planner_audit.model_dump(mode="json")
+                if planner_audit is not None
+                else None
+            ),
             "previous_hash": previous_hash,
             "sequence": len(self._events) + 1,
             "state_after": state_after.value,
@@ -163,6 +171,10 @@ class TraceRecorder:
             .isoformat(timespec="milliseconds")
             .replace("+00:00", "Z"),
         }
+        if payload["planner_audit"] is None:
+            # Keep pre-LLM v1 Trace hashes replayable while making LLM audit
+            # metadata part of the hash chain whenever it exists.
+            payload.pop("planner_audit")
         event_hash = compute_event_hash(payload)
         event = TraceEvent.model_validate({**payload, "event_hash": event_hash})
         self._events.append(event)

@@ -7,8 +7,8 @@
 
 The search engine ranks products, the Search Evaluation Harness measures two
 rankings, and the optimization Agent chooses which bounded experiment to try
-next. The model, when added, may propose hypotheses; it will not own metrics or
-publication.
+next. The optional LLM Planner may choose an experiment or stop after each
+Observation; it does not own metrics, tool arguments, approval or publication.
 
 ## What is implemented now
 
@@ -72,7 +72,7 @@ candidates.
 ```mermaid
 flowchart LR
     T[RetrievalOptimizationTask]
-    P[observation-driven Planner]
+    P[deterministic or LLM Planner]
     X[bounded Runtime]
     Q[20 fully judged Query pools]
     B[title BM25 plus exact-title baseline]
@@ -103,11 +103,12 @@ flowchart LR
 ```
 
 This slice distinguishes relevant products lost at recall, fusion and coarse
-rank. The Planner first observes the baseline diagnosis, then tests uniform.
-Because uniform fails seven gates it changes course to conservative; after that
-passes, it performs one bounded aggressive upside probe, which fails two gates,
-and selects conservative. Grounding recomputes the only valid next action before
-each tool call, while Replay recomputes the path without invoking the Planner or
+rank. The deterministic control observes the baseline, tests uniform,
+conservative and one bounded aggressive probe, then selects the best passing
+candidate. The optional LLM Planner instead chooses one server-generated option
+ID per Observation and may change candidate order or stop once a passing
+candidate exists. Grounding validates every choice against the current finite
+option set, while Replay recomputes that set without invoking the Planner or
 tools. “Eligible” is not “approved” or “active”: this path writes Runs,
 diagnoses, comparisons and a Trace only.
 
@@ -118,6 +119,7 @@ diagnoses, comparisons and a Trace only.
 | Start smoke analysis | Implemented through `POST /agent/strategy/propose` |
 | Show diagnosis, candidate experiments, three core metrics, gates and ten Query comparisons | Implemented |
 | Start stage-aware retrieval analysis | Implemented locally through `POST /agent/retrieval/analyze`; reference Nginx config requires Agent credentials |
+| Read LLM/deterministic readiness and budgets | Implemented through `GET /agent/retrieval/status`; no Key or Prompt is returned |
 | Show recall/fusion/coarse metrics, all RRF candidates, gates and product Top 10 evidence | Implemented locally; not yet claimed deployed |
 | Show the ordered Runtime actions, reasons, gate outcomes, evidence IDs and Trace ID | Implemented locally as a read-only timeline; validated against the backend response |
 | Approve or reject from the public browser | Intentionally disabled |
@@ -160,6 +162,8 @@ task -> Planner -> allowlisted tools -> observations -> Harness -> Trace -> Owne
 | Diagnosis, candidate search, selection score and gates | `src/search_quality/agent/strategy_search.py` |
 | Stage-aware Runtime entry | `src/search_quality/agent/retrieval_runtime.py` |
 | Stage-aware Planner and semantic validator | `src/search_quality/agent/retrieval_planner.py` |
+| LLM Planner, aggregate projection and config | `src/search_quality/agent/llm_retrieval_planner.py` |
+| Killable official-provider boundary | `src/search_quality/agent/llm_provider.py`, `llm_worker.py` |
 | Stage-aware allowlisted tools and response builder | `src/search_quality/agent/retrieval_tools.py` |
 | Recall channels, RRF and coarse pipeline | `src/search_quality/retrieval/` |
 | Retrieval evidence revalidation and gates | `src/search_quality/evaluation/retrieval_validation.py`, `retrieval_comparison.py` |
@@ -167,13 +171,12 @@ task -> Planner -> allowlisted tools -> observations -> Harness -> Trace -> Owne
 
 ## Next integration
 
-The stage-aware path is now one Runtime execution. The immediate proof step is
-an Agent Evaluation Harness with at least ten fixed tasks that scores tool
-selection, grounding, bounded recovery, terminal accuracy and Replay fidelity.
-The separate exact-boost controller can later be migrated behind the same task,
-tool and Trace contracts. A future model adapter may replace only the untrusted
-hypothesis-selection portion under the same schema, budget and permission
-boundary.
+The stage-aware path is now one Runtime execution, and its optional model adapter
+replaces only the untrusted option-selection portion under the same schema,
+budget and permission boundary. The immediate proof step is a committed
+real-provider smoke plus repeated deterministic-versus-LLM Planner evaluation
+for task success, variance, Tokens and latency. The separate exact-boost
+controller can later be migrated behind the same task, tool and Trace contracts.
 
 The remaining product path is:
 
@@ -189,9 +192,9 @@ fixed Agent evaluation tasks
 ## Interview-safe explanation
 
 > I currently have a bounded smoke-only Agent Runtime with two task families.
-> For stage-aware retrieval it diagnoses the baseline, observes seven failed
-> uniform gates, changes course to conservative, performs a bounded aggressive
-> probe, and sends only the 12-gate-passing conservative candidate to Owner
-> review. The full action/observation path is stored as an offline-replayable
-> Trace. It is still deterministic, smoke-only and not an approval or deployment
-> system; Agent Eval, larger validation and production activation remain next.
+> For stage-aware retrieval I keep a deterministic control and an optional LLM
+> Planner. The LLM sees only aggregate gates and selects one allowed option ID;
+> Runtime constructs and executes the action, Harness judges it, and Replay
+> validates the recorded path. The model has no strategy-write or deployment
+> authority. The implementation is smoke-only; real-provider quality, larger
+> validation and production activation remain separate gates.

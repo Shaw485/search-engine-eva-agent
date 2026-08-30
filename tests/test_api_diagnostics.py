@@ -90,6 +90,137 @@ def test_retrieval_analysis_route_has_a_strict_success_contract() -> None:
     assert api.RetrievalAnalysisResponse.model_config["extra"] == "forbid"
 
 
+def test_retrieval_agent_status_exposes_policy_without_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SEARCH_AGENT_PLANNER", raising=False)
+    monkeypatch.delenv("SEARCH_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("SEARCH_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("SEARCH_OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv(
+        "SEARCH_VOLCENGINE_AGENT_PLAN_API_KEY",
+        raising=False,
+    )
+    monkeypatch.delenv("SEARCH_LLM_MODEL", raising=False)
+
+    status = api.agent_retrieval_status()
+
+    assert api.RetrievalAgentStatusResponse.model_validate(status, strict=True)
+    assert status == {
+        "model_id": None,
+        "planner_id": "stage-aware-retrieval-planner-v1",
+        "planner_mode": "deterministic",
+        "policy": {
+            "max_elapsed_ms": 120_000,
+            "max_failures": 3,
+            "max_run_creations": 5,
+            "max_same_action_attempts": 2,
+            "max_steps": 8,
+            "max_tool_calls": 6,
+        },
+        "provider_id": None,
+        "runtime_id": "search-agent-runtime-v1",
+        "schema_version": "retrieval-agent-status-v1",
+        "state": "deterministic",
+        "strategy_write_allowed": False,
+        "tools": [
+            "diagnose_baseline_retrieval",
+            "run_retrieval_candidate",
+        ],
+    }
+    assert "key" not in json.dumps(status, sort_keys=True)
+
+
+def test_llm_status_can_report_not_configured_without_starting_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SEARCH_AGENT_PLANNER", "openai")
+    monkeypatch.setenv("SEARCH_LLM_MODEL", "gpt-5.2")
+    monkeypatch.delenv("SEARCH_LLM_API_KEY", raising=False)
+
+    status = api.agent_retrieval_status()
+
+    assert status["planner_mode"] == "llm"
+    assert status["state"] == "not_configured"
+    assert status["provider_id"] == "openai"
+    assert status["model_id"] == "gpt-5.2"
+    assert status["policy"] == {
+        "max_elapsed_ms": 120_000,
+        "max_failures": 1,
+        "max_run_creations": 4,
+        "max_same_action_attempts": 1,
+        "max_steps": 6,
+        "max_tool_calls": 4,
+    }
+    assert api.RetrievalAgentStatusResponse.model_validate(status, strict=True)
+
+    called = False
+
+    def fail_if_called(**_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("retrieval tools must not run without a configured key")
+
+    monkeypatch.setattr(api, "generate_retrieval_runtime_analysis", fail_if_called)
+    with pytest.raises(HTTPException) as captured:
+        api.agent_retrieval_analyze(api.RetrievalAnalysisRequest())
+    assert captured.value.status_code == 503
+    assert captured.value.detail["code"] == "llm_planner_not_configured"
+    assert called is False
+
+
+def test_ready_llm_status_never_exposes_the_server_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "secret-status-sentinel"
+    monkeypatch.setenv("SEARCH_AGENT_PLANNER", "openai")
+    monkeypatch.setenv("SEARCH_LLM_MODEL", "gpt-5.2")
+    monkeypatch.setenv("SEARCH_LLM_API_KEY", secret)
+    stream = io.StringIO()
+    configure_logging(default_level="DEBUG", stream=stream)
+
+    status = api.agent_retrieval_status()
+
+    assert status["state"] == "ready"
+    assert status["provider_id"] == "openai"
+    assert status["model_id"] == "gpt-5.2"
+    assert secret not in json.dumps(status, sort_keys=True)
+    assert secret not in stream.getvalue()
+
+
+def test_volcengine_agent_plan_status_uses_safe_provider_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "volcengine-secret-status-sentinel"
+    monkeypatch.setenv("SEARCH_AGENT_PLANNER", "llm")
+    monkeypatch.setenv("SEARCH_LLM_PROVIDER", "volcengine_agent_plan")
+    monkeypatch.setenv("SEARCH_LLM_MODEL", "ep-agent-plan-test")
+    monkeypatch.setenv("SEARCH_VOLCENGINE_AGENT_PLAN_API_KEY", secret)
+    stream = io.StringIO()
+    configure_logging(default_level="DEBUG", stream=stream)
+
+    status = api.agent_retrieval_status()
+
+    assert status["planner_mode"] == "llm"
+    assert status["state"] == "ready"
+    assert status["provider_id"] == "volcengine_agent_plan"
+    assert status["model_id"] == "ep-agent-plan-test"
+    assert api.RetrievalAgentStatusResponse.model_validate(status, strict=True)
+    assert secret not in json.dumps(status, sort_keys=True)
+    assert secret not in stream.getvalue()
+
+
+def test_retrieval_analysis_rejects_a_concurrent_run() -> None:
+    assert api._RETRIEVAL_ANALYSIS_LOCK.acquire(blocking=False)
+    try:
+        with pytest.raises(HTTPException) as captured:
+            api.agent_retrieval_analyze(api.RetrievalAnalysisRequest())
+    finally:
+        api._RETRIEVAL_ANALYSIS_LOCK.release()
+    assert captured.value.status_code == 409
+    assert captured.value.detail["code"] == "retrieval_analysis_in_progress"
+
+
 def test_agent_eval_endpoint_returns_only_aggregate_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -652,23 +783,29 @@ def test_new_agent_tool_requests_forbid_overrides() -> None:
 
 def test_runtime_response_rejects_two_failed_attempts_before_success() -> None:
     baseline = {
+        "decision_source": "deterministic",
         "evidence_ref": "run:retrieval-aaaaaaaaaaaa",
         "failed_gates": [],
         "gate_passed": None,
+        "model_call": None,
         "pipeline_variant": None,
         "reason_code": "diagnose_retrieval_baseline",
         "retryable": False,
+        "selected_option_id": None,
         "sequence": 1,
         "status": "succeeded",
         "tool_name": "diagnose_baseline_retrieval",
     }
     failed = {
+        "decision_source": "deterministic",
         "evidence_ref": None,
         "failed_gates": [],
         "gate_passed": None,
+        "model_call": None,
         "pipeline_variant": "title-exact-multifield-v1",
         "reason_code": "test_uniform_multifield_fusion",
         "retryable": True,
+        "selected_option_id": None,
         "status": "failed",
         "tool_name": "run_retrieval_candidate",
     }
@@ -689,12 +826,14 @@ def test_runtime_response_rejects_two_failed_attempts_before_success() -> None:
                     {**failed, "sequence": 3},
                     {**succeeded, "sequence": 4},
                 ],
+                "llm_usage": None,
                 "outcome": "proposal_ready",
                 "planner_id": "stage-aware-retrieval-planner-v1",
+                "planner_mode": "deterministic",
                 "reason_code": "conservative_candidate_selected",
-                "replay_supported": True,
+                "replay_mode": "recorded_trace",
                 "runtime_id": "search-agent-runtime-v1",
-                "schema_version": "retrieval-agent-run-summary-v1",
+                "schema_version": "retrieval-agent-run-summary-v2",
                 "state": "completed",
                 "steps_used": 5,
                 "tool_calls_used": 4,

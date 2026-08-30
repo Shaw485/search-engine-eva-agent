@@ -116,7 +116,7 @@ Owner 决定先在现有 `shawspace.cn` 搜索体验页搜索全部 1,814,924 �
 | 0. 工程骨架与搜索 Smoke | 可重复启动的本地搜索后端 | 为工具化提供稳定接口 | **Completed (OpenSearch live check pending)** |
 | 1. ESCI 数据与实验边界 | 可复现 train/dev/test、Manifest、数据报告 | 给 Agent 提供可信数据边界 | **Technical gate passed; learning check pending** |
 | 2. Search Evaluation Harness | 指标、BM25 基线、Run 与对比报告 | Agent 可依赖的确定性工具层 | **In Progress** |
-| 3. 最小搜索评测 Agent | 首个计划—工具—观察—报告闭环 | 第一次可见的真实 Agent 行为 | **In Progress: stage-aware deterministic path integrated** |
+| 3. 最小搜索评测 Agent | 首个计划—工具—观察—报告闭环 | 第一次可见的真实 Agent 行为 | **In Progress: deterministic control + optional bounded LLM loop integrated; real-model quality pending** |
 | 4. Agent Runtime Harness | 状态机、权限、预算、Trace、Replay | Agent 可控、可恢复、可复现 | **In Progress: local Trace/Replay + killable diagnostic worker** |
 | 5. Agent Evaluation Harness | 黄金任务集和 Agent 成绩单 | 证明 Agent 不是偶然成功 | **In Progress: fixed 12-task v1 passes locally** |
 | 6. 搜索策略与诊断实验室 | Multi-field BM25、Vector、Hybrid、Rerank、Bad Case | Agent 获得更多可组合实验工具 | **In Progress: query-scoped multi-recall + RRF + coarse-rank slice** |
@@ -237,12 +237,14 @@ Agent 循环：
 
 本阶段是作品第一次可以明确展示“Agent”的节点。
 
-当前进度（2026-08-28）：原有四个 trusted-Run 工具之外，阶段检索任务新增
+当前进度（2026-08-29）：原有四个 trusted-Run 工具之外，阶段检索任务新增
 两项最小能力：诊断基线与运行受控候选。观察驱动 Planner 已在真实 smoke
 路径上根据门禁结果完成 `uniform 失败 → conservative 通过 → aggressive
-探测失败 → 选择 conservative` 的改道，并生成结构化终态。它仍是确定性
-Planner，不是真实 LLM Planner，也尚未满足“至少 10 个固定 Agent 任务”的
-完整验收，因此不能对外声称阶段 3 已完成。
+探测失败 → 选择 conservative` 的确定性对照。可选 LLM Planner 现在会在
+每个 Observation 后只选择一个服务端有限 option ID，Runtime 再执行规范动作；
+Fake-provider Runtime/Replay 已证明它能选择 conservative 并基于 Harness 证据
+提前停止。真实 Provider 质量和重复运行稳定性尚未验证，因此不能把工程接通
+写成 LLM 决策质量已经通过。
 
 ### 阶段 4：Agent Runtime Harness、Trace 与 Replay
 
@@ -265,7 +267,7 @@ Planner，不是真实 LLM Planner，也尚未满足“至少 10 个固定 Agent
 - Replay 能还原历史工具结果和报告引用。
 - 相同 Trace 的证据不会因外部模型变化而消失。
 
-当前进度（2026-08-28）：有限状态、白名单能力、步数/调用/失败/大小预算、
+当前进度（2026-08-29）：有限状态、白名单能力、步数/调用/失败/大小预算、
 结构化错误、Trace 与离线 Replay 已覆盖 trusted-Run 比较和 stage-aware
 retrieval 两类本地任务。阶段检索 Grounding 与 Replay 会重算观察序列允许的
 下一动作，拒绝跳步、重排、门禁篡改和越权工具；工作台只展示经过 Replay
@@ -273,9 +275,10 @@ retrieval 两类本地任务。阶段检索 Grounding 与 Replay 会重算观察
 elapsed budget 只在本地动作之间协作检查，不能终止一个永不返回的外部调用。
 Bad Case 路径现已迁入独立 POSIX 进程组，父进程用 monotonic 125 秒 hard
 deadline 执行 `SIGTERM → bounded grace → SIGKILL`，并写不可变 supervisor
-receipt；这解决了该工具的强制终止问题，但其他未来模型/网络工具仍需同等隔离。
-真实模型接入前还必须补模型/Prompt/Token/成本版本与更强来源认证。因此阶段 4
-仍为进行中。
+receipt。LLM 决策也已迁入每轮一个可强杀子进程，并增加模型/Prompt/Schema
+版本、Token、调用耗时、响应 ID 摘要与累计预算；Key、Prompt、响应正文和
+自由推理不进 Trace/日志。阶段 4 仍需真实 Provider 重复运行、成本/方差评测和
+更强来源认证，因此仍为进行中。
 
 ### 阶段 5：Agent Evaluation Harness
 
@@ -469,8 +472,8 @@ Agent 不可以：
 
 - 纠错、Vector、语义/词法 Hybrid、fine rank、Cross-Encoder rerank 和业务
   重排等更多白名单策略；multi-field BM25/RRF 的 smoke 切片已先行实现。
-- 在 worker deadline、调用/Token/费用预算和严格 DSL 下接入可选模型 Planner；
-  模型只提假设，不计算指标或批准发布。
+- 用真实 Provider 重复评测已接通的可选模型 Planner，并比较任务成功、方差、
+  Token、延迟与费用；模型只选择受控假设，不计算指标或批准发布。
 - Bad Case 黄金集、流量分桶、置信区间和线上灰度指标。
 
 ## 7. 关键学习路线
@@ -553,6 +556,6 @@ Owner 完成固定 30 个盲化意图判断和 40 个行为判断并 seal。随�
 相关性判断池并交给 Search Harness。现阶段不能把行为恢复直接写成相关性提升，
 也不能批准策略或修改 `/catalog/search`。
 
-该工作仍不解锁 500-Query dev 或 frozen test。更大验证、模型 Planner、策略
+该工作仍不解锁 500-Query dev 或 frozen test。更大验证、真实模型质量、策略
 审批、全量 serving pipeline 和线上生效分别需要学习证据、安全机制与 Owner
 明确决策；“继续”不会自动跨越这些门禁。

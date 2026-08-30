@@ -18,6 +18,8 @@ from .contracts import (
     AgentDecision,
     AgentState,
     FinishDecision,
+    PlannerDecisionAudit,
+    RetrievalOptimizationTask,
     RuntimeTask,
     TerminalOutcome,
     TerminalResult,
@@ -171,6 +173,10 @@ class AgentRuntime:
                     ),
                     steps_used=steps_used,
                     tool_calls_used=tool_calls_used,
+                    remaining_ms=max(
+                        1,
+                        int(self.policy.max_elapsed_ms - self._elapsed_ms(started)),
+                    ),
                 )
                 planner_logger.debug(
                     "agent_planner_started",
@@ -193,6 +199,25 @@ class AgentRuntime:
                         reason_code="planner_failed",
                     )
                 try:
+                    planner_audit = self._take_planner_audit()
+                except (TypeError, ValueError, ValidationError):
+                    planner_logger.error(
+                        "agent_planner_failed",
+                        extra={
+                            "error_code": "planner_invalid_audit",
+                            "step": steps_used + 1,
+                        },
+                    )
+                    return self._fail(
+                        task=task,
+                        recorder=recorder,
+                        observations=observations,
+                        state=state,
+                        steps_used=steps_used,
+                        tool_calls_used=tool_calls_used,
+                        reason_code="planner_invalid_audit",
+                    )
+                try:
                     decision = decision_adapter.validate_python(
                         raw_decision, strict=True
                     )
@@ -203,6 +228,12 @@ class AgentRuntime:
                         > self.policy.max_decision_bytes
                     ):
                         raise ValueError("Planner decision exceeds its size budget")
+                    self._validate_planner_audit_binding(
+                        task=task,
+                        observations=tuple(observations),
+                        decision=decision,
+                        audit=planner_audit,
+                    )
                 except (TypeError, ValueError, ValidationError):
                     planner_logger.error(
                         "agent_planner_failed",
@@ -245,6 +276,7 @@ class AgentRuntime:
                         observations=observations,
                         state=state,
                         decision=decision,
+                        planner_audit=planner_audit,
                         steps_used=steps_used,
                         tool_calls_used=tool_calls_used,
                     )
@@ -272,7 +304,12 @@ class AgentRuntime:
                         )
                     run_creations += 1
                 action_key = hashlib.sha256(
-                    canonical_json_bytes(decision.model_dump(mode="json"))
+                    canonical_json_bytes(
+                        {
+                            "arguments": decision.arguments,
+                            "tool_name": decision.tool_name,
+                        }
+                    )
                 ).hexdigest()
                 attempts = action_attempts.get(action_key, 0) + 1
                 action_attempts[action_key] = attempts
@@ -292,6 +329,7 @@ class AgentRuntime:
                     event_type="action_selected",
                     state_after=AgentState.ACTING,
                     decision=decision,
+                    planner_audit=planner_audit,
                 )
                 state = AgentState.ACTING
                 tool_calls_used += 1
@@ -447,6 +485,7 @@ class AgentRuntime:
         observations: list[ToolObservation],
         state: AgentState,
         decision: FinishDecision,
+        planner_audit: PlannerDecisionAudit | None,
         steps_used: int,
         tool_calls_used: int,
     ) -> TerminalResult:
@@ -471,6 +510,7 @@ class AgentRuntime:
             event_type="run_completed",
             state_after=AgentState.COMPLETED,
             decision=decision,
+            planner_audit=planner_audit,
             terminal=result,
         )
         self._store_trace(task=task, recorder=recorder, result=result)
@@ -483,6 +523,45 @@ class AgentRuntime:
             },
         )
         return result
+
+    def _take_planner_audit(self) -> PlannerDecisionAudit | None:
+        reader = getattr(self.planner, "take_last_audit", None)
+        if reader is None:
+            if getattr(self.planner, "requires_decision_audit", False):
+                raise ValueError("Planner audit is required but unavailable")
+            return None
+        if not callable(reader):
+            raise TypeError("Planner audit reader must be callable")
+        raw_audit = reader()
+        if raw_audit is None:
+            if getattr(self.planner, "requires_decision_audit", False):
+                raise ValueError("Planner audit is required but missing")
+            return None
+        return PlannerDecisionAudit.model_validate(raw_audit, strict=True)
+
+    @staticmethod
+    def _validate_planner_audit_binding(
+        *,
+        task: RuntimeTask,
+        observations: tuple[ToolObservation, ...],
+        decision: AgentDecision,
+        audit: PlannerDecisionAudit | None,
+    ) -> None:
+        if not isinstance(task, RetrievalOptimizationTask):
+            if audit is not None:
+                raise ValueError("LLM audit is unsupported for this task")
+            return
+        if task.decision_policy != "adaptive_llm_v1":
+            if audit is not None:
+                raise ValueError("fixed retrieval policy contains LLM audit data")
+            return
+        if audit is None:
+            raise ValueError("adaptive retrieval decision is missing LLM audit data")
+        from .retrieval_policy import option_for_adaptive_decision
+
+        option = option_for_adaptive_decision(task, observations, decision)
+        if option.option_id != audit.selected_option_id:
+            raise ValueError("LLM option does not match its canonical decision")
 
     def _fail(
         self,

@@ -130,6 +130,27 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
   模型预算，因此不能把这些工程默认值写成 Owner 原创政策。
 - 状态：**Explanation delivered; independent verification pending**
 
+## 当前插入知识：兼容请求格式不等于可信 Provider
+
+【必学知识提醒】
+
+- 当前知识：多个供应商可能提供相似的 Responses/OpenAI-compatible 请求形状，
+  但 Key、固定域名、协议细节、计费和数据处理方仍然不同；不能把相似格式理解
+  为 Key 或任意 `base_url` 可以互换。
+- 为什么现在必须理解：本轮需要把 LLM Planner 从 OpenAI 切到火山 Agent
+  Plan。如果只替换 Key、不显式切换 Provider，凭据会发往错误的固定端点并被
+  拒绝；如果开放任意 URL，则又会扩大密钥泄露和出站访问边界。
+- 最低掌握范围：能说明 Provider、模型 ID、Key 三者必须分别显式配置；能区分
+  “发给模型的聚合 Observation”与“本地工作台返回给 Owner 的 Query/商品变化
+  样本”。
+- 具体例子：火山模式只把允许的 `option_id`、指标变化、门禁和风险率发给固定
+  `ark.cn-beijing.volces.com` Agent Plan Responses 端点；网页中的 Query 文本、
+  商品标题和前后 Top 10 仍是本地受保护证据，不进入模型请求。
+- 验证证据：Owner 于 2026-08-29 明确选择“火山agent plan”；Codex 新增
+  `docs/adr/010-volcengine-agent-plan-provider.md` 和相应配置/隐私说明。当前只
+  能记录为已讲解，不能把供应商选择等同于 Owner 已独立掌握协议与数据边界。
+- 状态：**Explanation delivered; independent verification pending**
+
 ## 当前插入知识：Recall 提升不等于最终排序提升
 
 【必学知识提醒】

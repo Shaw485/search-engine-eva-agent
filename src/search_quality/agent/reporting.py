@@ -107,6 +107,9 @@ def _build_retrieval_terminal_report(
         "uniform_candidate_passed": task.candidate_variants[0],
         "conservative_candidate_selected": task.candidate_variants[1],
         "aggressive_candidate_selected": task.candidate_variants[2],
+        "llm_uniform_candidate_selected": task.candidate_variants[0],
+        "llm_conservative_candidate_selected": task.candidate_variants[1],
+        "llm_aggressive_candidate_selected": task.candidate_variants[2],
     }
     selected_variant = selected_by_reason.get(reason_code)
     selected = next(

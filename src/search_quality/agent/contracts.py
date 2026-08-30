@@ -7,7 +7,15 @@ import re
 from enum import StrEnum
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+    model_validator,
+)
 
 RUN_ID_PATTERN = r"[a-z][a-z0-9-]{0,31}-[0-9a-f]{12}"
 SAFE_ID_PATTERN = r"[a-z][a-z0-9_-]{0,63}"
@@ -82,6 +90,10 @@ class RetrievalOptimizationTask(StrictModel):
     objective: Literal["expand_recall_without_downstream_regression"] = (
         "expand_recall_without_downstream_regression"
     )
+    decision_policy: Literal[
+        "fixed_sequence_v1",
+        "adaptive_llm_v1",
+    ] = "fixed_sequence_v1"
     candidate_variants: tuple[RetrievalPipelineVariant, ...] = (
         RETRIEVAL_PIPELINE_VARIANTS
     )
@@ -111,6 +123,35 @@ class FinishDecision(StrictModel):
 
 
 AgentDecision = ToolAction | FinishDecision
+
+
+class PlannerDecisionAudit(StrictModel):
+    """Bounded LLM provenance; never stores prompts, responses or credentials."""
+
+    schema_version: Literal["planner-decision-audit-v1"] = "planner-decision-audit-v1"
+    source: Literal["llm"] = "llm"
+    provider_id: Literal["openai", "volcengine_agent_plan"] = "openai"
+    model_id: StrictStr = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+    prompt_version: Literal["retrieval-choice-prompt-v1"] = "retrieval-choice-prompt-v1"
+    decision_schema_version: Literal["retrieval-choice-schema-v1"] = (
+        "retrieval-choice-schema-v1"
+    )
+    data_policy: Literal["aggregate_only_v1"] = "aggregate_only_v1"
+    planner_config_sha256: StrictStr = Field(pattern=r"^[0-9a-f]{64}$")
+    response_id_sha256: StrictStr = Field(pattern=r"^[0-9a-f]{64}$")
+    selected_option_id: StrictStr = Field(pattern=SAFE_ID_FIELD_PATTERN)
+    option_count: StrictInt = Field(ge=1, le=8)
+    attempt_count: Literal[1] = 1
+    input_tokens: StrictInt = Field(ge=0)
+    output_tokens: StrictInt = Field(ge=0)
+    total_tokens: StrictInt = Field(ge=0)
+    duration_ms: StrictFloat = Field(ge=0.0)
+
+    @model_validator(mode="after")
+    def validate_usage(self) -> Self:
+        if self.total_tokens != self.input_tokens + self.output_tokens:
+            raise ValueError("Planner token total does not match input plus output")
+        return self
 
 
 class ToolObservation(StrictModel):
