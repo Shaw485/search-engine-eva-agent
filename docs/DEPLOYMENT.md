@@ -91,7 +91,7 @@ sudo systemctl reload nginx
 ```
 
 If an Owner password was ever pasted into chat, a ticket, a command argument or
-another non-secret channel, rotate it before enabling the public login shell:
+another non-secret channel, rotate it before enabling the protected Owner APIs:
 
 ```bash
 sudo htpasswd -B /etc/nginx/.search-agent.htpasswd shaw
@@ -100,12 +100,13 @@ sudo htpasswd -B /etc/nginx/.search-agent.htpasswd shaw
 Enter the replacement only at the interactive prompt. Use a new, high-entropy,
 non-reused password; do not pass it on the command line or record it in a log.
 
-## Optional LLM Planner configuration
+## Owner-only optional LLM Planner configuration
 
 The deployed default is the deterministic control and needs no model Key. To
-enable the bounded LLM loop with the Owner-selected Volcengine Agent Plan
-provider, edit the existing root-owned environment file interactively and add
-these variable names with an explicitly reviewed model:
+enable the bounded LLM loop for the **Owner-only** analysis route with the
+Owner-selected Volcengine Agent Plan provider, edit the existing root-owned
+environment file interactively and add these variable names with an explicitly
+reviewed model:
 
 ```text
 SEARCH_AGENT_PLANNER=llm
@@ -115,6 +116,23 @@ SEARCH_VOLCENGINE_AGENT_PLAN_API_KEY=<server-side secret>
 SEARCH_LLM_TIMEOUT_MS=30000
 SEARCH_LLM_MAX_OUTPUT_TOKENS=128
 ```
+
+This is a separate, explicit activation procedure, not a normal code-deployment
+step. The current code release must remain deterministic: do not enter, copy,
+rotate or activate an Agent Plan Key during deployment, and do not change
+`SEARCH_AGENT_PLANNER` to `llm`. Before restarting the service, verify only the
+non-secret Planner mode; an absent value means the deterministic default:
+
+```bash
+search_planner_mode="$(sudo sed -n 's/^SEARCH_AGENT_PLANNER=//p' \
+  /etc/search-engine-eva-agent.env | tail -n 1)"
+test -z "$search_planner_mode" || test "$search_planner_mode" = deterministic
+unset search_planner_mode
+```
+
+An Owner may perform LLM activation later as a separate change after reviewing
+provider/model identity, spend and outbound aggregate-data policy. That change
+requires its own smoke, rollback evidence and audit record.
 
 The Volcengine adapter has the fixed base URL
 `https://ark.cn-beijing.volces.com/api/plan/v3` and calls
@@ -136,7 +154,9 @@ Key configuration must be explicit; there is no default model or arbitrary
 endpoint override.
 
 To disable model use without deleting the retained secret immediately, set
-`SEARCH_AGENT_PLANNER=deterministic` and restart. Rotate the Key if it has ever
+`SEARCH_AGENT_PLANNER=deterministic` and restart. This prevents new model calls
+because only the Owner route resolves Planner configuration, while the public
+route is hard-wired to deterministic mode. Rotate the Key if it has ever
 appeared in a non-secret channel.
 
 The Key is sent only as authentication to the fixed provider endpoint. The
@@ -144,35 +164,58 @@ model's evidence input contains only the finite allowed option IDs and
 aggregate Observation fields: stage metric deltas, gate outcomes/failed-gate
 names, bounded risk rates and step/tool budgets. It does not contain Query text,
 product IDs/titles, result lists, recovered products or
-`changed_query_examples`. The authenticated local retrieval response may still
-return up to ten changed examples to the Owner's browser; those are protected
-local evidence and must not be copied into provider model input, logs, Trace or
-deployment output.
+`changed_query_examples`. The public projected retrieval response may still
+return up to ten changed examples from the committed public ESCI smoke fixture;
+those examples must not be copied into provider model input, logs or Trace.
 
-`/search-agent.html` is a public, no-store login shell because embedded browsers
-may not implement native Basic Auth navigation. It contains no private evidence
-and keeps the complete workbench hidden until its in-page form validates the
-Owner credential against the exact `/search-agent-auth-check.json` location.
-The browser holds the equivalent Basic value only in the current page's memory;
-it is never stored in a Cookie, URL, `localStorage` or `sessionStorage`, and it
-is cleared on refresh, close, logout or any `401/403` response.
+`/search-agent.html` is public and `no-store`. The one exact public compute
+route, `POST /search-eval-api/agent/retrieval/analyze`, accepts only the fixed
+`{"profile":"smoke"}` contract. The application always constructs
+`ObservationDrivenRetrievalPlanner` for this route; it never reads
+`SEARCH_AGENT_PLANNER`, provider/model configuration or a provider Key. The
+response is a strict public v1 projection of committed public ESCI comparison
+evidence with provider/model/Token metadata removed. It does not accept
+arbitrary Query text, dataset paths, strategy writes or human judgments.
 
-The auth probe and all 14 allowlisted Agent API locations use the fixed Basic
-Auth realm `Search Agent Owner`. The probe is limited to 5 requests/minute per
-source IP with a burst of 3; Owner APIs are limited to 30 requests/minute with a
-burst of 15. Their `401` result is internally converted to
+Nginx limits the public route to 2 requests/minute per source IP with a burst of
+1, one in-flight request across the whole site, a 1 KiB request body and a
+130-second read timeout. It explicitly disables Basic Auth and clears
+Authorization, Cookie and Owner-principal headers. The API adds a non-blocking
+process-level single-flight lock: an uncached concurrent request returns `409`.
+A completed response is cached in memory by exact
+`(profile, SEARCH_CODE_REVISION)` and copied on every read, so refreshes do not
+repeat the bounded experiment. The cache is lost on service restart and a new
+revision uses a new key.
+
+The separate exact route,
+`POST /search-eval-api/agent/retrieval/analyze-owner`, is protected by the
+`Search Agent Owner` Basic Auth realm. Only this route loads the configured
+deterministic or LLM Planner and returns the complete private v2 Runtime
+response. It never reads from or writes to the public response cache, so an
+authenticated call is a new bounded run. The public and Owner routes share one
+process single-flight lock; either returns `409` if the other analysis already
+owns it. Nginx strips Basic credentials before proxying, and the provider Key
+remains only in the root-owned service environment. The Owner-only
+`GET /search-eval-api/agent/retrieval/status` reports configuration readiness
+without returning a Key or Prompt.
+
+The auth probe, configured analysis/status routes and every other Owner
+data-bearing Agent API location continue to use the fixed Basic Auth realm
+`Search Agent Owner`. The probe is limited to 5
+requests/minute per source IP with a burst of 3; Owner APIs are limited to 30
+requests/minute with a burst of 15. Their `401` result is internally converted to
 a final `403`, so the page can handle rejection instead of navigating into a
 native 401 flow. Some Nginx builds retain a `WWW-Authenticate` response header
 after an `error_page` redirect; the required acceptance signal is the final 403
 status and the target browser remaining on the HTML form. Nginx validates every
 request and clears the Authorization header before proxying. Normal requests do
-not enter an access log. Only rate-limit rejections are written to the dedicated
-safe JSON log described below. Unknown
-`/search-eval-api/agent/*` routes fail closed with `404`; only the exact adopted
-strategy catalog is public. The search experience, strategy page and catalog
-search also stay public. The exact decision location deliberately returns 404
-even with credentials; human decisions are owner-only and must use the loopback
-API.
+not enter an access log. Only rejections are written to the dedicated safe JSON
+logs described below. Unknown `/search-eval-api/agent/*` routes fail closed with
+`404`; only the exact retrieval analysis and adopted strategy catalog routes are
+public. Proposal, Agent Eval, Query construction, Bad Case, diagnostic planning
+and Human Oracle routes remain Owner-authenticated. The exact decision location
+deliberately returns 404 even with credentials; human decisions are owner-only
+and must use the loopback API.
 
 Every Basic-auth location sends only `crit` events to
 `/var/log/nginx/search-agent-auth-critical.log`. This prevents routine unknown
@@ -192,11 +235,30 @@ Before reload, confirm the wildcard covers `/var/log/nginx/*.log` and run
 semantics then remain identical to the other Nginx logs. Alert on a sustained
 non-zero 429 rate or repeated bursts from one source IP. Verbose auth failure
 logging stays disabled in production.
+
+Public analysis rejections use a separate structured JSON file,
+`/var/log/nginx/search-agent-public-analysis-rejection.log`. It contains only
+timestamp, request ID, source IP, status, method, exact path and duration; it
+does not contain request bodies, Query arguments, usernames, cookies,
+Authorization or Owner principal headers. View only this module with
+`sudo tail -f /var/log/nginx/search-agent-public-analysis-rejection.log` and
+filter busy/limit responses with `jq 'select(.status == 409 or .status == 429)'`.
+The same existing `/etc/logrotate.d/nginx` wildcard must cover this `.log` file;
+verify that once with `sudo logrotate --debug /etc/logrotate.conf` and do not
+add a duplicate matching stanza. Accepted requests do not enter this Nginx
+access log. API public-cache miss/hit/busy events and Owner-run
+busy/failure events are separately available through the `api` journal module
+and contain only the fixed profile, stable error metadata and trace identifiers,
+never response content. Owner analyses never emit a public-cache hit or store
+event.
+
 The retrieval location has a 130-second read timeout because its bounded
-Runtime policy allows at most 120 seconds. This is a synchronous smoke-only
-bridge; before larger data or concurrent use, replace it with a queued worker,
-pollable task status and force-terminable job deadline rather than extending the
-HTTP timeout again.
+Runtime policy allows at most 120 seconds. This remains a synchronous smoke-only
+bridge protected by Nginx concurrency and the API single-flight lock; before
+larger data or multi-worker use, replace it with a queued worker, pollable task
+status and force-terminable job deadline rather than extending the HTTP timeout
+again. If Uvicorn is ever configured with multiple workers, replace the
+process-local lock/cache with a shared store before deployment.
 Agent Eval uses the same 130-second proxy timeout. Bad Case diagnostics uses
 140 seconds for its 125-second process-group deadline plus bounded TERM/KILL
 grace and HTTP overhead. Human Oracle behavior view uses 40 seconds because the
@@ -264,7 +326,11 @@ sudo chmod 0600 /etc/search-engine-eva-agent.env
 ```
 
 Normal releases update only the separate code-revision file and preserve the
-Oracle identity material:
+Oracle identity material. After pulling the release, install the new
+HTTP-scoped rate definitions **before** synchronizing the exact public and
+Owner locations into the HTTPS server. Validate the combined configuration
+with `nginx -t` before reloading; reversing this order can leave a newly-added
+location referring to a rate-limit zone that Nginx has not loaded yet:
 
 ```bash
 sudo git -C /var/www/search-engine-eva-agent pull --ff-only
@@ -279,8 +345,16 @@ sudo grep -Eq '^SEARCH_HUMAN_ORACLE_ALLOWED_ORIGIN=https://shawspace\.cn$' /etc/
 sudo grep -Eq '^SEARCH_HUMAN_ORACLE_ACTOR_HMAC_KEY=[0-9a-f]{64}$' /etc/search-engine-eva-agent.env
 sudo grep -Eq '^SEARCH_HUMAN_ORACLE_ACTOR_HMAC_KEY_ID=[a-z][a-z0-9-]{0,63}$' /etc/search-engine-eva-agent.env
 sudo grep -Eq '^SEARCH_HUMAN_ORACLE_OWNER_HMAC_SHA256=[0-9a-f]{64}$' /etc/search-engine-eva-agent.env
+# Code deployment does not activate a provider Key. An absent Planner value is
+# deterministic; an explicit value must also remain deterministic for this release.
+search_planner_mode="$(sudo sed -n 's/^SEARCH_AGENT_PLANNER=//p' \
+  /etc/search-engine-eva-agent.env | tail -n 1)"
+test -z "$search_planner_mode" || test "$search_planner_mode" = deterministic
+unset search_planner_mode
 sudo install -d -o www-data -g www-data -m 0750 /var/lib/search-engine-eva-agent/runtime
+sudo /var/www/search-engine-eva-agent/.venv/bin/pip install -r /var/www/search-engine-eva-agent/requirements-dev.lock
 sudo /var/www/search-engine-eva-agent/.venv/bin/pip install --no-build-isolation --no-deps -e /var/www/search-engine-eva-agent
+sudo /var/www/search-engine-eva-agent/.venv/bin/pip check
 sudo install -o root -g root -m 0644 \
   /var/www/search-engine-eva-agent/deploy/search-engine-eva-agent.service \
   /etc/systemd/system/search-engine-eva-agent.service
@@ -289,6 +363,14 @@ sudo systemctl daemon-reload
 sudo systemctl restart search-engine-eva-agent
 sudo systemctl is-active search-engine-eva-agent
 curl http://127.0.0.1:8010/health
+sudo install -o root -g root -m 0644 \
+  /var/www/search-engine-eva-agent/deploy/nginx-search-agent-rate-limit-http.conf \
+  /etc/nginx/conf.d/search-agent-rate-limit.conf
+# Now synchronize every exact `location = ...` block from
+# deploy/nginx-search-eval.conf into the existing shawspace.cn HTTPS server.
+sudoedit /etc/nginx/sites-enabled/shawspace.cn
+sudo nginx -t
+sudo systemctl reload nginx
 curl --request POST 'https://shawspace.cn/search-eval-api/catalog/search' \
   --header 'Content-Type: application/json' \
   --data '{"query":"wireless mouse","top_k":3}'
@@ -316,12 +398,29 @@ curl --output /dev/null --write-out '%{http_code}\n' \
   'https://shawspace.cn/search-eval-api/agent/retrieval/analyze' \
   --header 'Content-Type: application/json' \
   --data '{"profile":"smoke"}'
-curl --user shaw --request POST \
+# The public payload is v1 and contains no configured Planner/provider usage.
+curl --request POST \
   'https://shawspace.cn/search-eval-api/agent/retrieval/analyze' \
   --header 'Content-Type: application/json' \
+  --data '{"profile":"smoke"}' \
+  | jq -e '.agent_run.schema_version == "retrieval-agent-run-summary-v1" and (.agent_run | [has("planner_mode"), has("provider_id"), has("model_id"), has("llm_usage")] | any | not)'
+# The configurable full-v2 route and readiness route stay Owner-only.
+curl --output /dev/null --write-out '%{http_code}\n' \
+  --request POST \
+  'https://shawspace.cn/search-eval-api/agent/retrieval/analyze-owner' \
+  --header 'Content-Type: application/json' \
   --data '{"profile":"smoke"}'
+curl --user shaw --request POST \
+  'https://shawspace.cn/search-eval-api/agent/retrieval/analyze-owner' \
+  --header 'Content-Type: application/json' \
+  --data '{"profile":"smoke"}' \
+  | jq -e '.agent_run.schema_version == "retrieval-agent-run-summary-v2" and .agent_run.planner_mode == "deterministic"'
 curl --user shaw \
-  'https://shawspace.cn/search-eval-api/agent/retrieval/status'
+  'https://shawspace.cn/search-eval-api/agent/retrieval/status' \
+  | jq -e '.planner_mode == "deterministic" and .state == "deterministic" and (.model_id == null) and (.provider_id == null)'
+# Non-POST methods must be rejected by the exact public location.
+curl --output /dev/null --write-out '%{http_code}\n' \
+  'https://shawspace.cn/search-eval-api/agent/retrieval/analyze'
 curl --output /dev/null --write-out '%{http_code}\n' \
   --request POST 'https://shawspace.cn/search-eval-api/agent/eval/run' \
   --header 'Content-Type: application/json' \
@@ -379,26 +478,31 @@ Acceptance requires:
 
 1. Health reports `catalog.status=ready`, the expected index ID and 1,814,924 products.
 2. English, Spanish, Japanese and exact product-ID checks return valid JSON.
-3. Anonymous requests to the Agent page return `200` with the in-page login form
-   and the workbench still hidden. The auth check, proposal, stage-aware
-   retrieval/Bad Case, diagnostic-plan and Human Oracle endpoints return a final
-   `403`; the target browser must stay on the webpage form rather than show a
-   native authentication error. Unknown Agent routes return `404`. The
+3. Anonymous requests to the Agent page return `200` and the read-only workbench
+   is usable without a password. The fixed smoke retrieval analysis returns
+   `200` (or `409` while its single flight is busy), always identifies the
+   public v1 deterministic Runtime, and contains no Planner mode, provider,
+   model or Token usage fields. Anonymous calls to the Owner analysis/status,
+   auth check, proposal, Agent Eval, Query constructor, Bad Case,
+   diagnostic-plan and Human Oracle endpoints return a final `403`; the target
+   browser must not show a native authentication error. Unknown Agent routes
+   return `404`. The
    authenticated auth check returns only the fixed schema and boolean,
-   and authenticated proposal requests return a
+   the authenticated Owner analysis returns the full v2 deterministic Runtime
+   for this release without a public-cache event, and authenticated proposal
+   requests return a
    pending proposal with baseline Run ID, candidate Run ID, comparison ID,
-   aggregate metric deltas and bad-case examples. An authenticated retrieval
-   analysis returns all three bounded candidate outcomes, stage metrics, 12 gate
+   aggregate metric deltas and bad-case examples. The public retrieval analysis
+   returns all three bounded candidate outcomes, stage metrics, 12 gate
    checks and representative product evidence. A successful Bad Case response
    reports exactly 59 calls, zero operational failures, no quality metrics or
    strategy writes, no more than 12 evidence-linked display samples, and a
    validated supervisor receipt containing the 125-second deadline policy and
    TERM/KILL grace. An authenticated, exact-origin Oracle create request returns
    20 clusters/40 candidates/30 intent tasks; missing origin, cross-site or
-   non-JSON requests fail closed. Refreshing or closing the page requires a new
-   login, and no credential appears in Cookie, URL, `localStorage`,
-   `sessionStorage`, browser logs, Nginx access logs or application logs. Search
-   and strategy pages remain anonymously accessible.
+   non-JSON requests fail closed. No credential appears in Cookie, URL,
+   `localStorage`, `sessionStorage`, browser logs, Nginx rejection logs or
+   application logs. Search and strategy pages remain anonymously accessible.
 4. The strategy catalog endpoint returns the current approved runtime strategy
    list. It can be empty before the Owner approves a proposal.
 5. The public decision check returns `404`; only a deliberate loopback request
@@ -409,12 +513,14 @@ Acceptance requires:
 8. The optimized lane is still visibly unsupported.
 9. A failed Query can be correlated by `X-Request-ID` without Query text in logs.
 
-For stage-aware retrieval, a successful authenticated response means only that
-the local smoke analysis completed. It must report `proposal_ready` or a bounded
-terminal status without creating a strategy decision, catalog entry or active
-configuration. Verify `/catalog/search` is unchanged. Deployment of this new
-route/UI requires an explicit release action and must not be inferred from a
-local test or this reference configuration.
+For stage-aware retrieval, a successful public response means only that the
+deterministic smoke analysis completed. It must report `proposal_ready` or a
+bounded terminal status without creating a strategy decision, catalog entry or
+active configuration. Verify `/catalog/search` is unchanged. A successful
+Owner response proves only that the configured Planner completed the same
+bounded workflow; it does not approve or activate its candidate. Enabling an
+LLM/provider Key is a separate Owner change and must not be inferred from this
+code deployment, a public run or a previous local smoke.
 
 Proposal, retrieval Run/diagnosis/comparison and decision JSON under the
 runtime directory are evidence artifacts rather than logs. They can contain

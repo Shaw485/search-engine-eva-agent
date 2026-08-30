@@ -277,19 +277,52 @@ and `stage_diagnosis_failed`; `retrieval_analysis` emits
 durably published. These use only content-addressed evidence IDs,
 category/count summaries and stable outcomes. Completion events also report
 only the number of changed Query examples split into improvement and regression;
-the protected workbench examples themselves remain private evidence. None logs raw Query text,
-product identifiers, titles, labels,
-ranked lists, filesystem paths or exception messages.
+the public response may display bounded examples from the committed public ESCI
+smoke fixture, but those examples never enter diagnostics. The API module emits
+`public_retrieval_analysis_cache_miss`,
+`public_retrieval_analysis_cache_hit`,
+`public_retrieval_analysis_cache_hit_after_lock`,
+`public_retrieval_analysis_cached` and
+`public_retrieval_analysis_rejected_busy` with only the fixed profile. A public
+failure emits `public_retrieval_analysis_failed` with stable error metadata and
+the request trace. The public route is permanently deterministic and returns a
+strict v1 projection, so these events never identify configured provider/model
+or Token usage.
 
-Those two data planes must remain distinct when diagnosing an LLM run. Apart
-from fixed instructions/schema and call metadata, the OpenAI or Volcengine
-model evidence input receives only aggregate Observation counts, deltas, gates
-and risk rates; the Key is used only for authentication. The authenticated
-local API can return `changed_query_examples` with Query/product/result details
-for human review, but the application must never log them or copy them into a
-provider model input. Filter `agent_provider` by the provider ID and model to
-inspect the network boundary; inspect the protected local evidence artifact,
-not provider logs, when a changed example is needed.
+The separate Owner-only full-v2 route does not use the public cache. Its API
+boundary emits `owner_retrieval_analysis_rejected_busy`,
+`owner_retrieval_planner_unavailable` or
+`owner_retrieval_analysis_failed`; a successful run is correlated through the
+existing `agent_runtime`, `agent_model`, `agent_provider`, `agent_tools` and
+`retrieval_analysis` events. `agent_retrieval_configuration_invalid` isolates
+an invalid Owner status configuration. None logs raw Query text, product
+identifiers, titles, labels, ranked lists, filesystem paths, Prompt, provider
+response, Key or exception message. An Owner run must never emit
+`public_retrieval_analysis_cache_hit*` or
+`public_retrieval_analysis_cached`.
+
+At the proxy boundary, rejected public analysis requests are independently
+recorded in
+`/var/log/nginx/search-agent-public-analysis-rejection.log`. The JSON schema is
+limited to timestamp, request ID, source IP, status, method, exact URI and
+duration. Request bodies, arguments, credentials, cookies, Owner identity and
+response content are excluded. Successful calls are not written to that file.
+Production rotation reuses the host `/etc/logrotate.d/nginx` wildcard; verify
+coverage with `logrotate --debug` rather than adding a duplicate stanza.
+
+The public browser and model-provider data planes must remain distinct when
+diagnosing an LLM run. `POST /agent/retrieval/analyze` always constructs
+`ObservationDrivenRetrievalPlanner`; it never resolves
+`SEARCH_AGENT_PLANNER`, provider/model configuration or a Key. Only Owner-only
+`POST /agent/retrieval/analyze-owner` may enter `agent_provider`. Apart from
+fixed instructions/schema and call metadata, the OpenAI or Volcengine model
+evidence input receives only aggregate Observation counts, deltas, gates and
+risk rates; the Key is used only for authentication. The public projected v1
+API may return bounded `changed_query_examples` with committed
+Query/product/result details, but the application must never log them or copy
+them into a provider model input. Filter `agent_provider` by provider ID and
+model to inspect the Owner network boundary; inspect the private local evidence
+artifact, not provider logs, when full comparison evidence is needed.
 
 The corresponding JSON under `retrieval-runs/`, `stage-diagnoses/` and
 `retrieval-comparisons/` is private evidence, not a sanitized log. It may
@@ -424,18 +457,24 @@ systemd-analyze cat-config systemd/journald.conf
     inspect the corresponding subdirectories below
     `/var/lib/search-engine-eva-agent/runtime/` as an authorized operator.
 13. `retrieval`: enable only `retrieval=DEBUG` while calling
-    `/agent/retrieval/analyze`; filter by `pipeline_run_id`, `pipeline_id` or
-    `channel_id`. Inspect the private Run only when stage rankings are required.
+    public `/agent/retrieval/analyze` or Owner
+    `/agent/retrieval/analyze-owner`; filter by `pipeline_run_id`, `pipeline_id`
+    or `channel_id`. Inspect the private Run only when stage rankings are
+    required.
 14. `stage_diagnosis`: enable only `stage_diagnosis=INFO`; filter by
     `diagnosis_id` or `pipeline_run_id` to isolate diagnosis from the per-Query
     retrieval work.
 15. `retrieval_analysis`: enable only `retrieval_analysis=INFO`; filter by
     `comparison_id`, `candidate_run_id` or `pipeline_run_id` to inspect bounded
     experiment publication without enabling either retrieval or diagnosis logs.
-    The current `/agent/retrieval/analyze` entry is orchestrated by
-    `agent_runtime`; enable `agent_runtime=INFO,agent_tools=INFO` to isolate the
-    ordered Agent/tool boundaries, then enable `retrieval` or `stage_diagnosis`
-    only when the lower-level search stage is the suspected fault.
+    Both analysis entries are orchestrated by `agent_runtime`; enable
+    `agent_runtime=INFO,agent_tools=INFO` to isolate the ordered Agent/tool
+    boundaries, then enable `retrieval` or `stage_diagnosis` only when the
+    lower-level search stage is the suspected fault. For the public route,
+    verify `public_retrieval_analysis_cache_*` events and absence of
+    `agent_provider`. For the Owner route, verify the absence of public-cache
+    events and enable `agent_model`/`agent_provider` only if its configured
+    Planner is LLM.
 16. `agent_eval`: run `make agent-eval` with only `agent_eval=INFO`; filter by
     `suite_id`, `task_id` or `evidence_id`. Enable `agent_runtime` or
     `agent_replay` separately only when that boundary is under investigation.

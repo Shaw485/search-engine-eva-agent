@@ -49,6 +49,11 @@ class _FakeCatalogService:
         return _FakeCatalogResult()
 
 
+def _clear_retrieval_analysis_cache() -> None:
+    with api._RETRIEVAL_ANALYSIS_CACHE_LOCK:
+        api._RETRIEVAL_ANALYSIS_CACHE.clear()
+
+
 def test_catalog_search_returns_full_catalog_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -70,14 +75,118 @@ def test_retrieval_analysis_endpoint_returns_stage_evidence(
         "status": "requires_engineering",
     }
 
+    calls = 0
+
     def analyze(**kwargs):
+        nonlocal calls
+        calls += 1
         assert kwargs["project_root"] == api.PROJECT_ROOT
         assert kwargs["profile_id"] == "smoke"
+        assert kwargs["revision_provider"](api.PROJECT_ROOT) == "a" * 40
+        assert isinstance(kwargs["planner"], api.ObservationDrivenRetrievalPlanner)
         return expected
 
+    _clear_retrieval_analysis_cache()
+    monkeypatch.setattr(api, "_api_code_revision", lambda _root: "a" * 40)
     monkeypatch.setattr(api, "generate_retrieval_runtime_analysis", analyze)
+    monkeypatch.setattr(api, "_project_public_retrieval_analysis", lambda value: value)
 
-    assert api.agent_retrieval_analyze(api.RetrievalAnalysisRequest()) == expected
+    try:
+        first = api.agent_retrieval_analyze(api.RetrievalAnalysisRequest())
+        first["status"] = "client_mutation"
+        second = api.agent_retrieval_analyze(api.RetrievalAnalysisRequest())
+    finally:
+        _clear_retrieval_analysis_cache()
+
+    assert second == expected
+    assert calls == 1
+
+
+def test_retrieval_analysis_cache_key_includes_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revision = ["a" * 40]
+    calls: list[str] = []
+
+    def analyze(**kwargs):
+        current = kwargs["revision_provider"](api.PROJECT_ROOT)
+        calls.append(current)
+        return {"revision": current}
+
+    _clear_retrieval_analysis_cache()
+    monkeypatch.setattr(api, "_api_code_revision", lambda _root: revision[0])
+    monkeypatch.setattr(api, "generate_retrieval_runtime_analysis", analyze)
+    monkeypatch.setattr(api, "_project_public_retrieval_analysis", lambda value: value)
+
+    try:
+        assert api.agent_retrieval_analyze(api.RetrievalAnalysisRequest()) == {
+            "revision": "a" * 40
+        }
+        revision[0] = "b" * 40
+        assert api.agent_retrieval_analyze(api.RetrievalAnalysisRequest()) == {
+            "revision": "b" * 40
+        }
+    finally:
+        _clear_retrieval_analysis_cache()
+
+    assert calls == ["a" * 40, "b" * 40]
+
+
+def test_retrieval_analysis_rejects_concurrent_cache_miss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_retrieval_analysis_cache()
+    monkeypatch.setattr(api, "_api_code_revision", lambda _root: "a" * 40)
+    assert api._RETRIEVAL_ANALYSIS_LOCK.acquire(blocking=False)
+    try:
+        with pytest.raises(HTTPException) as captured:
+            api.agent_retrieval_analyze(api.RetrievalAnalysisRequest())
+    finally:
+        api._RETRIEVAL_ANALYSIS_LOCK.release()
+        _clear_retrieval_analysis_cache()
+
+    assert captured.value.status_code == 409
+    assert captured.value.detail["code"] == "retrieval_analysis_in_progress"
+
+
+def test_public_retrieval_payload_scanner_allows_esci_but_rejects_secrets() -> None:
+    safe = {
+        "query_text": "wireless mouse",
+        "product_title": "Basic Home Wireless Mouse for Laptop",
+        "evidence_ref": "comparison:retrieval-comparison-aaaaaaaaaaaa",
+    }
+    api._assert_public_retrieval_payload_safe(safe)
+
+    for unsafe in (
+        {"authorization": "redacted"},
+        {"api_key": "redacted"},
+        {"access_token": "redacted"},
+        {"refresh_token": "redacted"},
+        {"nested": {"owner_credentials": "redacted"}},
+        {"remote_user": "redacted"},
+        {"artifact_path": "redacted"},
+        {"value": "Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ=="},
+        {"value": "Bearer opaque-access-token-value"},
+        {"value": "/var/lib/private-evidence.json"},
+        {"value": r"C:\private\evidence.json"},
+    ):
+        with pytest.raises(ValueError, match="private metadata"):
+            api._assert_public_retrieval_payload_safe(unsafe)
+
+
+def test_public_retrieval_projection_allowlist_tracks_response_contract() -> None:
+    assert set(api._PUBLIC_RETRIEVAL_TOP_LEVEL_FIELDS) == set(
+        api.PublicRetrievalAnalysisResponse.model_fields
+    )
+    assert set(api._PUBLIC_RETRIEVAL_TOP_LEVEL_FIELDS).isdisjoint(
+        {
+            "aggregate",
+            "candidate_aggregate",
+            "evaluation_boundary",
+            "pipeline",
+            "pipeline_id",
+        }
+    )
 
 
 def test_retrieval_analysis_route_has_a_strict_success_contract() -> None:
@@ -86,8 +195,78 @@ def test_retrieval_analysis_route_has_a_strict_success_contract() -> None:
         for item in api.app.routes
         if getattr(item, "path", None) == "/agent/retrieval/analyze"
     )
-    assert route.response_model is api.RetrievalAnalysisResponse
+    assert route.response_model is api.PublicRetrievalAnalysisResponse
+    assert api.PublicRetrievalAnalysisResponse.model_config["extra"] == "forbid"
+
+    owner_route = next(
+        item
+        for item in api.app.routes
+        if getattr(item, "path", None) == "/agent/retrieval/analyze-owner"
+    )
+    assert owner_route.response_model is api.RetrievalAnalysisResponse
     assert api.RetrievalAnalysisResponse.model_config["extra"] == "forbid"
+
+
+def test_public_retrieval_analysis_never_resolves_llm_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SEARCH_AGENT_PLANNER", "llm")
+    monkeypatch.setenv("SEARCH_LLM_PROVIDER", "volcengine_agent_plan")
+    monkeypatch.setenv("SEARCH_LLM_MODEL", "paid-model-sentinel")
+    monkeypatch.setenv(
+        "SEARCH_VOLCENGINE_AGENT_PLAN_API_KEY",
+        "private-key-sentinel",
+    )
+    monkeypatch.setattr(api, "_api_code_revision", lambda _root: "a" * 40)
+
+    def fail_if_provider_is_built(_config):
+        raise AssertionError("public analysis must not construct an LLM provider")
+
+    def analyze(**kwargs):
+        assert isinstance(kwargs["planner"], api.ObservationDrivenRetrievalPlanner)
+        return {"mode": "deterministic"}
+
+    _clear_retrieval_analysis_cache()
+    monkeypatch.setattr(api, "build_retrieval_planner", fail_if_provider_is_built)
+    monkeypatch.setattr(api, "generate_retrieval_runtime_analysis", analyze)
+    monkeypatch.setattr(api, "_project_public_retrieval_analysis", lambda value: value)
+    try:
+        result = api.agent_retrieval_analyze(api.RetrievalAnalysisRequest())
+    finally:
+        _clear_retrieval_analysis_cache()
+
+    assert result == {"mode": "deterministic"}
+
+
+def test_owner_retrieval_analysis_resolves_configured_planner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = object()
+    planner = object()
+    expected = {"status": "owner-analysis"}
+
+    monkeypatch.setattr(
+        api,
+        "load_retrieval_planner_configuration",
+        lambda: config,
+    )
+
+    def build(received):
+        assert received is config
+        return planner
+
+    def analyze(**kwargs):
+        assert kwargs["planner"] is planner
+        assert kwargs["revision_provider"](api.PROJECT_ROOT) == "a" * 40
+        return expected
+
+    monkeypatch.setattr(api, "build_retrieval_planner", build)
+    monkeypatch.setattr(api, "_api_code_revision", lambda _root: "a" * 40)
+    monkeypatch.setattr(api, "generate_retrieval_runtime_analysis", analyze)
+
+    assert api._owner_retrieval_analysis(profile_id="smoke") == expected
+    assert api._RETRIEVAL_ANALYSIS_LOCK.acquire(blocking=False)
+    api._RETRIEVAL_ANALYSIS_LOCK.release()
 
 
 def test_retrieval_agent_status_exposes_policy_without_credentials(
@@ -163,7 +342,7 @@ def test_llm_status_can_report_not_configured_without_starting_tools(
 
     monkeypatch.setattr(api, "generate_retrieval_runtime_analysis", fail_if_called)
     with pytest.raises(HTTPException) as captured:
-        api.agent_retrieval_analyze(api.RetrievalAnalysisRequest())
+        api.agent_retrieval_analyze_owner(api.RetrievalAnalysisRequest())
     assert captured.value.status_code == 503
     assert captured.value.detail["code"] == "llm_planner_not_configured"
     assert called is False
@@ -208,17 +387,6 @@ def test_volcengine_agent_plan_status_uses_safe_provider_metadata(
     assert api.RetrievalAgentStatusResponse.model_validate(status, strict=True)
     assert secret not in json.dumps(status, sort_keys=True)
     assert secret not in stream.getvalue()
-
-
-def test_retrieval_analysis_rejects_a_concurrent_run() -> None:
-    assert api._RETRIEVAL_ANALYSIS_LOCK.acquire(blocking=False)
-    try:
-        with pytest.raises(HTTPException) as captured:
-            api.agent_retrieval_analyze(api.RetrievalAnalysisRequest())
-    finally:
-        api._RETRIEVAL_ANALYSIS_LOCK.release()
-    assert captured.value.status_code == 409
-    assert captured.value.detail["code"] == "retrieval_analysis_in_progress"
 
 
 def test_agent_eval_endpoint_returns_only_aggregate_evidence(
@@ -856,10 +1024,15 @@ def test_retrieval_analysis_failure_is_safe(
     def fail(**_kwargs):
         raise ValueError("private query, product title and /private/path")
 
+    _clear_retrieval_analysis_cache()
+    monkeypatch.setattr(api, "_api_code_revision", lambda _root: "a" * 40)
     monkeypatch.setattr(api, "generate_retrieval_runtime_analysis", fail)
-    with logging_context(trace_id="retrieval-api-safe"):
-        with pytest.raises(HTTPException) as captured:
-            api.agent_retrieval_analyze(api.RetrievalAnalysisRequest())
+    try:
+        with logging_context(trace_id="retrieval-api-safe"):
+            with pytest.raises(HTTPException) as captured:
+                api.agent_retrieval_analyze(api.RetrievalAnalysisRequest())
+    finally:
+        _clear_retrieval_analysis_cache()
 
     assert captured.value.status_code == 503
     assert captured.value.detail == {
@@ -870,6 +1043,8 @@ def test_retrieval_analysis_failure_is_safe(
     assert "private query" not in stream.getvalue()
     assert "product title" not in stream.getvalue()
     assert "/private/path" not in stream.getvalue()
+    assert api._RETRIEVAL_ANALYSIS_LOCK.acquire(blocking=False)
+    api._RETRIEVAL_ANALYSIS_LOCK.release()
 
 
 def test_catalog_search_failure_is_safe_and_does_not_log_query(

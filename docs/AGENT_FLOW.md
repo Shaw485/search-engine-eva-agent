@@ -112,14 +112,46 @@ option set, while Replay recomputes that set without invoking the Planner or
 tools. “Eligible” is not “approved” or “active”: this path writes Runs,
 diagnoses, comparisons and a Trace only.
 
+### Two HTTP entry points, one safety boundary
+
+```mermaid
+flowchart LR
+    B[public browser]
+    O[authenticated Owner]
+    D[ObservationDrivenRetrievalPlanner]
+    L[configured deterministic or LLM Planner]
+    R[bounded Runtime and Harness]
+    V1[public v1 projection plus revision/profile cache]
+    V2[full private v2 response; no public cache]
+
+    B -->|POST /agent/retrieval/analyze| D --> R --> V1
+    O -->|POST /agent/retrieval/analyze-owner| L --> R --> V2
+```
+
+The anonymous route is permanently wired to
+`ObservationDrivenRetrievalPlanner`. It never reads `SEARCH_AGENT_PLANNER`, a
+provider/model setting or a provider Key, even when the service's Owner mode is
+configured for LLM use. It returns only the strict public v1 projection and
+caches it by `(profile, SEARCH_CODE_REVISION)`.
+
+The Owner-only route is the sole HTTP analysis route that resolves
+`SEARCH_AGENT_PLANNER`, provider, model and server-side Key configuration. It
+returns the full v2 Runtime summary and is deliberately excluded from the
+public cache, so each authenticated request is an auditable new run. The two
+routes share the same non-blocking single-flight lock, preventing concurrent
+public and Owner analyses from competing for the bounded Runtime. The readiness
+route, `GET /agent/retrieval/status`, is also Owner-only because it exposes the
+configured provider/model identity, although it never returns a Key or Prompt.
+
 ## What the website can and cannot do
 
 | Capability | Current status |
 |---|---|
 | Start smoke analysis | Implemented through `POST /agent/strategy/propose` |
 | Show diagnosis, candidate experiments, three core metrics, gates and ten Query comparisons | Implemented |
-| Start stage-aware retrieval analysis | Implemented locally through `POST /agent/retrieval/analyze`; reference Nginx config requires Agent credentials |
-| Read LLM/deterministic readiness and budgets | Implemented through `GET /agent/retrieval/status`; no Key or Prompt is returned |
+| Start public stage-aware retrieval analysis | Implemented through `POST /agent/retrieval/analyze`; always deterministic, strict public v1 and cached |
+| Start configured Owner analysis | Implemented through Owner-only `POST /agent/retrieval/analyze-owner`; full v2, deterministic or LLM, never public-cached |
+| Read configured LLM/deterministic readiness and budgets | Implemented through Owner-only `GET /agent/retrieval/status`; no Key or Prompt is returned |
 | Show recall/fusion/coarse metrics, all RRF candidates, gates and product Top 10 evidence | Implemented locally; not yet claimed deployed |
 | Show the ordered Runtime actions, reasons, gate outcomes, evidence IDs and Trace ID | Implemented locally as a read-only timeline; validated against the backend response |
 | Approve or reject from the public browser | Intentionally disabled |
@@ -127,9 +159,11 @@ diagnoses, comparisons and a Trace only.
 | Make `/catalog/search` use the approved strategy | Not implemented |
 | Run larger-set validation and automatic rollback | Not implemented |
 
-The website therefore visualizes a real backend analysis, but it does not have
-production publication authority. Opening the decision route to the public
-requires Owner authentication, CSRF protection and audit identity.
+The website therefore visualizes a real deterministic backend analysis, but it
+does not have production publication authority or access to paid model quota.
+The full configured Planner and decision surfaces remain Owner-only; opening a
+decision route to the public would additionally require authenticated identity,
+CSRF protection and an auditable authorization design.
 
 ## Three systems to keep separate
 
@@ -173,10 +207,12 @@ task -> Planner -> allowlisted tools -> observations -> Harness -> Trace -> Owne
 
 The stage-aware path is now one Runtime execution, and its optional model adapter
 replaces only the untrusted option-selection portion under the same schema,
-budget and permission boundary. The immediate proof step is a committed
-real-provider smoke plus repeated deterministic-versus-LLM Planner evaluation
-for task success, variance, Tokens and latency. The separate exact-boost
-controller can later be migrated behind the same task, tool and Trace contracts.
+budget and permission boundary. A first real-provider smoke is recorded, but
+repeated deterministic-versus-LLM evaluation is still required for task
+success, variance, Tokens and latency. Production remains deterministic until
+the Owner separately reviews model, spend and activation. The separate
+exact-boost controller can later be migrated behind the same task, tool and
+Trace contracts.
 
 The remaining product path is:
 

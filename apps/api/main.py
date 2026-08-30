@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import re
@@ -33,6 +34,7 @@ from search_quality.agent.optimization import (
     generate_strategy_proposal,
     load_strategy_catalog,
 )
+from search_quality.agent.retrieval_planner import ObservationDrivenRetrievalPlanner
 from search_quality.agent.retrieval_runtime import generate_retrieval_runtime_analysis
 from search_quality.agent_eval.runner import run_agent_eval_suite
 from search_quality.bad_cases.artifacts import BadCaseRunInProgress
@@ -110,7 +112,41 @@ _AGENT_PROPOSAL_LOCK = threading.Lock()
 _AGENT_EVAL_LOCK = threading.Lock()
 _RETRIEVAL_ANALYSIS_LOCK = threading.Lock()
 _BAD_CASE_LOCK = threading.Lock()
+_RETRIEVAL_ANALYSIS_CACHE_LOCK = threading.Lock()
 _AGENT_PROPOSAL_CACHE: dict[tuple[str, str, str, str], dict] = {}
+_RETRIEVAL_ANALYSIS_CACHE: dict[tuple[str, str], dict] = {}
+_RETRIEVAL_ANALYSIS_CACHE_LIMIT = 4
+_PUBLIC_RETRIEVAL_SENSITIVE_KEY_PARTS = frozenset(
+    {
+        "authorization",
+        "accesstoken",
+        "apikey",
+        "cookie",
+        "credential",
+        "credentials",
+        "owner",
+        "password",
+        "passwd",
+        "path",
+        "principal",
+        "privatekey",
+        "pwd",
+        "refreshtoken",
+        "remoteuser",
+        "secret",
+        "secretkey",
+        "token",
+        "username",
+    }
+)
+_PUBLIC_RETRIEVAL_SENSITIVE_VALUE_PATTERN = re.compile(
+    r"^\s*Basic\s+(?=[A-Za-z0-9+/=]*[0-9+/=])"
+    r"[A-Za-z0-9+/]{12,}={0,2}\s*$"
+    r"|^\s*Bearer\s+[A-Za-z0-9._~+/=-]{12,}\s*$"
+    r"|-----BEGIN(?: [A-Z]+)* PRIVATE KEY-----"
+    r"|(?:^|[\s\"'=])(?:/Users/|/home/|/var/|/etc/|/private/|/tmp/)"
+    r"|(?:^|[\s\"'=])[A-Za-z]:\\"
+)
 
 app = FastAPI(
     title="Search Engine EVA Agent",
@@ -266,6 +302,7 @@ async def request_diagnostics(request: Request, call_next):
                 "/agent/strategy/catalog",
                 "/agent/strategy/propose",
                 "/agent/retrieval/analyze",
+                "/agent/retrieval/analyze-owner",
                 "/agent/retrieval/status",
                 "/agent/eval/run",
                 "/agent/bad-cases/run",
@@ -1404,6 +1441,112 @@ class RetrievalAgentRunResponse(BaseModel):
         return self
 
 
+class PublicRetrievalAgentActionResponse(BaseModel):
+    """Deterministic action evidence safe for the anonymous workbench."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    evidence_ref: str | None = Field(
+        default=None,
+        pattern=(
+            r"^(?:run:retrieval-[0-9a-f]{12}|"
+            r"comparison:retrieval-comparison-[0-9a-f]{12})$"
+        ),
+    )
+    failed_gates: list[RetrievalGateName] = Field(max_length=12)
+    gate_passed: bool | None
+    pipeline_variant: (
+        Literal[
+            "title-exact-multifield-v1",
+            "title-exact-multifield-weighted-v1",
+            "title-exact-multifield-weighted-aggressive-v1",
+        ]
+        | None
+    )
+    reason_code: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    retryable: bool
+    sequence: int = Field(ge=1)
+    status: Literal["succeeded", "failed"]
+    tool_name: Literal[
+        "diagnose_baseline_retrieval",
+        "run_retrieval_candidate",
+    ]
+
+    @model_validator(mode="after")
+    def validate_action_observation_pair(self) -> Self:
+        is_baseline = self.tool_name == "diagnose_baseline_retrieval"
+        if is_baseline and self.pipeline_variant is not None:
+            raise ValueError("baseline action must not declare a pipeline variant")
+        if not is_baseline and self.pipeline_variant is None:
+            raise ValueError("candidate action must declare a pipeline variant")
+        if self.status == "failed":
+            if (
+                self.evidence_ref is not None
+                or self.gate_passed is not None
+                or self.failed_gates
+                or not self.retryable
+            ):
+                raise ValueError("recoverable failed action shape is invalid")
+            return self
+        if self.retryable or self.evidence_ref is None:
+            raise ValueError("successful action shape is invalid")
+        if is_baseline:
+            if self.gate_passed is not None or self.failed_gates:
+                raise ValueError("baseline action must not declare gate evidence")
+            if not self.evidence_ref.startswith("run:"):
+                raise ValueError("baseline evidence must reference a Run")
+        elif (
+            not self.evidence_ref.startswith("comparison:")
+            or self.gate_passed is None
+            or self.gate_passed is not (not self.failed_gates)
+        ):
+            raise ValueError("candidate gate evidence shape is invalid")
+        return self
+
+
+class PublicRetrievalAgentRunResponse(BaseModel):
+    """Stable deterministic Runtime summary without provider/model metadata."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    actions: list[PublicRetrievalAgentActionResponse] = Field(
+        min_length=1,
+        max_length=6,
+    )
+    outcome: Literal["proposal_ready", "no_safe_improvement"]
+    planner_id: Literal["stage-aware-retrieval-planner-v1"]
+    reason_code: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    replay_supported: Literal[True]
+    runtime_id: Literal["search-agent-runtime-v1"]
+    schema_version: Literal["retrieval-agent-run-summary-v1"]
+    state: Literal["completed"]
+    steps_used: int = Field(ge=1, le=8)
+    tool_calls_used: int = Field(ge=1, le=6)
+    trace_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+    @model_validator(mode="after")
+    def validate_runtime_counts_and_recovery(self) -> Self:
+        if self.tool_calls_used != len(self.actions):
+            raise ValueError("tool call count must match action summary")
+        if self.steps_used != self.tool_calls_used + 1:
+            raise ValueError("completed Runtime requires one terminal step")
+        for index, action in enumerate(self.actions):
+            if action.sequence != index + 1:
+                raise ValueError("action sequence must be contiguous")
+            if action.status != "failed":
+                continue
+            if index + 1 >= len(self.actions):
+                raise ValueError("failed action must have a recorded retry")
+            retry = self.actions[index + 1]
+            if (
+                retry.status != "succeeded"
+                or retry.tool_name != action.tool_name
+                or retry.pipeline_variant != action.pipeline_variant
+            ):
+                raise ValueError("failed action retry must preserve action scope")
+        return self
+
+
 class RetrievalAgentPolicyResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -1556,7 +1699,7 @@ class RetrievalChangedQueryExampleResponse(BaseModel):
 
 
 class RetrievalAnalysisResponse(BaseModel):
-    """Strict top-level contract for the authenticated Agent workbench."""
+    """Full Owner contract for one fixed-profile Runtime analysis."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -1611,6 +1754,588 @@ class RetrievalAnalysisResponse(BaseModel):
             if example.is_selected_comparison is not selected:
                 raise ValueError("changed Query example selected state is inconsistent")
         return self
+
+
+class PublicRetrievalDiagnosisFindingResponse(BaseModel):
+    """Minimum diagnosis evidence used by the public workbench."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    impact: float = Field(allow_inf_nan=False, ge=0.0, le=1.0)
+    impact_aggregation: Literal[
+        "relevant_item_micro_rate",
+        "mean_query_metric_delta",
+    ]
+    stage_dropped_relevant_count: int = Field(ge=0)
+    subtype: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+
+
+class PublicRetrievalDiagnosisResponse(BaseModel):
+    """Public diagnosis projection without strategies, evidence refs or paths."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    diagnosis_id: str = Field(pattern=r"^stage-diagnosis-[0-9a-f]{12}$")
+    findings: list[PublicRetrievalDiagnosisFindingResponse] = Field(max_length=8)
+
+
+class PublicRetrievalExperimentResponse(BaseModel):
+    """One bounded candidate summary required by the browser contract."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    candidate_run_id: str = Field(pattern=r"^retrieval-[0-9a-f]{12}$")
+    comparison_id: str = Field(pattern=r"^retrieval-comparison-[0-9a-f]{12}$")
+    failed_gates: list[str] = Field(max_length=12)
+    fusion_mrr_at_10_delta: float = Field(allow_inf_nan=False, ge=-1.0, le=1.0)
+    fusion_ndcg_at_10_delta: float = Field(allow_inf_nan=False, ge=-1.0, le=1.0)
+    fusion_weights: Literal["uniform"] | dict[str, float]
+    gate_passed: bool
+    pipeline_variant: Literal[
+        "title-exact-multifield-v1",
+        "title-exact-multifield-weighted-v1",
+        "title-exact-multifield-weighted-aggressive-v1",
+    ]
+    worst_fusion_query_ndcg_at_10_delta: float = Field(
+        allow_inf_nan=False,
+        ge=-1.0,
+        le=1.0,
+    )
+
+
+class PublicRetrievalProposalResponse(BaseModel):
+    """Read-only recommendation copy; it cannot approve or write a strategy."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    candidate_strategy_id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,127}$")
+    decision: Literal["request_owner_review", "reject_candidate"]
+    next_action: Literal[
+        "request_owner_review",
+        "run_recall_channel_and_rrf_ablation",
+        "replace_recall_candidate",
+    ]
+    reason: str = Field(min_length=1, max_length=512)
+
+
+class PublicRetrievalAnalysisResponse(BaseModel):
+    """Minimum stable egress contract for anonymous fixed-profile analysis."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    agent_run: PublicRetrievalAgentRunResponse
+    candidate_diagnosis: PublicRetrievalDiagnosisResponse
+    candidate_diagnosis_id: str = Field(pattern=r"^stage-diagnosis-[0-9a-f]{12}$")
+    candidate_run_id: str = Field(pattern=r"^retrieval-[0-9a-f]{12}$")
+    changed_query_examples: list[RetrievalChangedQueryExampleResponse] = Field(
+        max_length=10
+    )
+    comparison: dict
+    comparison_id: str = Field(pattern=r"^retrieval-comparison-[0-9a-f]{12}$")
+    diagnosis: PublicRetrievalDiagnosisResponse
+    diagnosis_id: str = Field(pattern=r"^stage-diagnosis-[0-9a-f]{12}$")
+    experiments: list[PublicRetrievalExperimentResponse] = Field(
+        min_length=3,
+        max_length=3,
+    )
+    profile: Literal["smoke"]
+    proposal: PublicRetrievalProposalResponse
+    retrieval_run_id: str = Field(pattern=r"^retrieval-[0-9a-f]{12}$")
+    schema_version: Literal["retrieval-stage-analysis-response-v1"]
+    status: Literal["proposal_ready", "no_safe_improvement"]
+
+
+_PUBLIC_RETRIEVAL_TOP_LEVEL_FIELDS = (
+    "agent_run",
+    "candidate_diagnosis",
+    "candidate_diagnosis_id",
+    "candidate_run_id",
+    "changed_query_examples",
+    "comparison",
+    "comparison_id",
+    "diagnosis",
+    "diagnosis_id",
+    "experiments",
+    "profile",
+    "proposal",
+    "retrieval_run_id",
+    "schema_version",
+    "status",
+)
+
+
+def _assert_public_retrieval_payload_safe(
+    value: object,
+    *,
+    path: tuple[str, ...] = (),
+) -> None:
+    """Reject credentials, private paths and identity material before egress.
+
+    Query text and product titles are intentionally allowed because this fixed
+    smoke profile contains only committed public ESCI examples used by the
+    public comparison UI. The scan protects against future internal metadata
+    being added under one of the still-evolving nested evidence dictionaries.
+    """
+
+    if isinstance(value, dict):
+        for raw_key, item in value.items():
+            key = str(raw_key)
+            normalized = re.sub(r"[^a-z0-9]+", "", key.lower())
+            if any(
+                part in normalized for part in _PUBLIC_RETRIEVAL_SENSITIVE_KEY_PARTS
+            ):
+                raise ValueError("public retrieval response contains private metadata")
+            _assert_public_retrieval_payload_safe(item, path=(*path, key))
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _assert_public_retrieval_payload_safe(
+                item,
+                path=(*path, str(index)),
+            )
+        return
+    if isinstance(value, str) and _PUBLIC_RETRIEVAL_SENSITIVE_VALUE_PATTERN.search(
+        value
+    ):
+        raise ValueError("public retrieval response contains private metadata")
+
+
+def _public_mapping(value: object) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError("public retrieval source shape is invalid")
+    return value
+
+
+def _public_list(value: object) -> list:
+    if not isinstance(value, list):
+        raise ValueError("public retrieval source shape is invalid")
+    return value
+
+
+def _public_field(source: dict, key: str) -> object:
+    if key not in source:
+        raise ValueError("public retrieval source shape is invalid")
+    return source[key]
+
+
+def _project_public_delta(value: object) -> dict:
+    source = _public_mapping(value)
+    return {
+        "baseline": _public_field(source, "baseline"),
+        "candidate": _public_field(source, "candidate"),
+        "delta": _public_field(source, "delta"),
+    }
+
+
+def _project_public_fusion_weights(value: object) -> object:
+    if isinstance(value, str):
+        return value
+    source = _public_mapping(value)
+    return {
+        channel: _public_field(source, channel)
+        for channel in (
+            "exact-title-recall-v1",
+            "multi-field-bm25-recall-v1",
+            "title-bm25-recall-v1",
+        )
+    }
+
+
+def _project_public_result(value: object) -> dict:
+    source = _public_mapping(value)
+    return {
+        key: _public_field(source, key)
+        for key in ("label", "locale", "product_id", "product_title", "rank")
+    }
+
+
+def _project_public_recovered_result(value: object) -> dict:
+    source = _public_mapping(value)
+    return {
+        key: _public_field(source, key)
+        for key in (
+            "candidate_first_loss_stage",
+            "candidate_multi_field_rank",
+            "label",
+            "locale",
+            "product_id",
+            "product_title",
+        )
+    }
+
+
+def _project_public_query(value: object) -> dict:
+    source = _public_mapping(value)
+    return {
+        "baseline_top_results": [
+            _project_public_result(item)
+            for item in _public_list(_public_field(source, "baseline_top_results"))
+        ],
+        "candidate_top_results": [
+            _project_public_result(item)
+            for item in _public_list(_public_field(source, "candidate_top_results"))
+        ],
+        "coarse_ndcg@10_delta": _public_field(source, "coarse_ndcg@10_delta"),
+        "fusion_ndcg@10_delta": _public_field(source, "fusion_ndcg@10_delta"),
+        "locale": _public_field(source, "locale"),
+        "query_id": _public_field(source, "query_id"),
+        "query_text": _public_field(source, "query_text"),
+        "recovered_relevant": [
+            _project_public_recovered_result(item)
+            for item in _public_list(_public_field(source, "recovered_relevant"))
+        ],
+        "union_coverage_delta": _public_field(source, "union_coverage_delta"),
+    }
+
+
+def _project_public_diagnosis(value: object) -> dict:
+    source = _public_mapping(value)
+    return {
+        "diagnosis_id": _public_field(source, "diagnosis_id"),
+        "findings": [
+            {
+                key: _public_field(_public_mapping(item), key)
+                for key in (
+                    "impact",
+                    "impact_aggregation",
+                    "stage_dropped_relevant_count",
+                    "subtype",
+                )
+            }
+            for item in _public_list(_public_field(source, "findings"))
+        ],
+    }
+
+
+def _project_public_agent_run(value: object) -> dict:
+    source = _public_mapping(value)
+    return {
+        "actions": [
+            {
+                key: _public_field(_public_mapping(item), key)
+                for key in (
+                    "evidence_ref",
+                    "failed_gates",
+                    "gate_passed",
+                    "pipeline_variant",
+                    "reason_code",
+                    "retryable",
+                    "sequence",
+                    "status",
+                    "tool_name",
+                )
+            }
+            for item in _public_list(_public_field(source, "actions"))
+        ],
+        "replay_supported": True,
+        "schema_version": "retrieval-agent-run-summary-v1",
+        **{
+            key: _public_field(source, key)
+            for key in (
+                "outcome",
+                "planner_id",
+                "reason_code",
+                "runtime_id",
+                "state",
+                "steps_used",
+                "tool_calls_used",
+                "trace_id",
+            )
+        },
+    }
+
+
+def _project_public_experiment(value: object) -> dict:
+    source = _public_mapping(value)
+    return {
+        "candidate_run_id": _public_field(source, "candidate_run_id"),
+        "comparison_id": _public_field(source, "comparison_id"),
+        "failed_gates": list(_public_list(_public_field(source, "failed_gates"))),
+        "fusion_mrr_at_10_delta": _public_field(
+            source,
+            "fusion_mrr_at_10_delta",
+        ),
+        "fusion_ndcg_at_10_delta": _public_field(
+            source,
+            "fusion_ndcg_at_10_delta",
+        ),
+        "fusion_weights": _project_public_fusion_weights(
+            _public_field(source, "fusion_weights")
+        ),
+        "gate_passed": _public_field(source, "gate_passed"),
+        "pipeline_variant": _public_field(source, "pipeline_variant"),
+        "worst_fusion_query_ndcg_at_10_delta": _public_field(
+            source,
+            "worst_fusion_query_ndcg_at_10_delta",
+        ),
+    }
+
+
+def _project_public_proposal(value: object) -> dict:
+    source = _public_mapping(value)
+    return {
+        key: _public_field(source, key)
+        for key in ("candidate_strategy_id", "decision", "next_action", "reason")
+    }
+
+
+def _project_public_changed_example(value: object) -> dict:
+    source = _public_mapping(value)
+    return {
+        "baseline_top_results": [
+            _project_public_result(item)
+            for item in _public_list(_public_field(source, "baseline_top_results"))
+        ],
+        "candidate_run_id": _public_field(source, "candidate_run_id"),
+        "candidate_top_results": [
+            _project_public_result(item)
+            for item in _public_list(_public_field(source, "candidate_top_results"))
+        ],
+        "coarse_ndcg@10_delta": _public_field(source, "coarse_ndcg@10_delta"),
+        "comparison_id": _public_field(source, "comparison_id"),
+        "fusion_ndcg@10_delta": _public_field(source, "fusion_ndcg@10_delta"),
+        "gate_passed": _public_field(source, "gate_passed"),
+        "is_selected_comparison": _public_field(
+            source,
+            "is_selected_comparison",
+        ),
+        "locale": _public_field(source, "locale"),
+        "outcome": _public_field(source, "outcome"),
+        "pipeline_variant": _public_field(source, "pipeline_variant"),
+        "query_id": _public_field(source, "query_id"),
+        "query_text": _public_field(source, "query_text"),
+        "recovered_relevant": [
+            _project_public_recovered_result(item)
+            for item in _public_list(_public_field(source, "recovered_relevant"))
+        ],
+        "union_coverage_delta": _public_field(source, "union_coverage_delta"),
+    }
+
+
+def _project_public_comparison(value: object) -> dict:
+    source = _public_mapping(value)
+    aggregate_source = _public_mapping(_public_field(source, "aggregate_deltas"))
+    aggregate = {
+        "recall_union": {
+            "judged_relevant_coverage": _project_public_delta(
+                _public_field(
+                    _public_mapping(_public_field(aggregate_source, "recall_union")),
+                    "judged_relevant_coverage",
+                )
+            )
+        }
+    }
+    for stage_name in ("fusion", "coarse_rank"):
+        stage = _public_mapping(_public_field(aggregate_source, stage_name))
+        aggregate[stage_name] = {
+            metric: _project_public_delta(_public_field(stage, metric))
+            for metric in (
+                "judged_recall@5",
+                "judged_recall@10",
+                "mrr@10",
+                "ndcg@10",
+            )
+        }
+
+    transitions_source = _public_mapping(
+        _public_field(source, "candidate_stage_transitions")
+    )
+    transitions = {
+        metric: {
+            key: _public_field(
+                _public_mapping(_public_field(transitions_source, metric)),
+                key,
+            )
+            for key in ("coarse_rank", "delta", "fusion")
+        }
+        for metric in ("judged_recall@10", "mrr@10", "ndcg@10")
+    }
+    candidate_source = _public_mapping(_public_field(source, "candidate_strategy"))
+    gate_source = _public_mapping(_public_field(source, "gate_result"))
+    return {
+        "aggregate_deltas": aggregate,
+        "baseline_run_id": _public_field(source, "baseline_run_id"),
+        "candidate_run_id": _public_field(source, "candidate_run_id"),
+        "candidate_stage_transitions": transitions,
+        "candidate_strategy": {
+            "fusion_weights": _project_public_fusion_weights(
+                _public_field(candidate_source, "fusion_weights")
+            ),
+            "pipeline_variant": _public_field(candidate_source, "pipeline_variant"),
+            "unique_relevant_contribution": _public_field(
+                candidate_source,
+                "unique_relevant_contribution",
+            ),
+        },
+        "comparison_id": _public_field(source, "comparison_id"),
+        "gate_result": {
+            "checks": [
+                {
+                    key: _public_field(_public_mapping(item), key)
+                    for key in (
+                        "comparator",
+                        "name",
+                        "observed",
+                        "passed",
+                        "threshold",
+                    )
+                }
+                for item in _public_list(_public_field(gate_source, "checks"))
+            ],
+            "passed": _public_field(gate_source, "passed"),
+        },
+        "per_query": [
+            _project_public_query(item)
+            for item in _public_list(_public_field(source, "per_query"))
+        ],
+        "schema_version": _public_field(source, "schema_version"),
+    }
+
+
+def _project_public_retrieval_analysis(analysis: dict) -> dict:
+    """Recursively pick only browser-required fields from trusted evidence."""
+
+    validated = RetrievalAnalysisResponse.model_validate(analysis, strict=True)
+    source = validated.model_dump(mode="json", by_alias=True)
+    projected = {
+        "agent_run": _project_public_agent_run(_public_field(source, "agent_run")),
+        "candidate_diagnosis": _project_public_diagnosis(
+            _public_field(source, "candidate_diagnosis")
+        ),
+        "candidate_diagnosis_id": _public_field(source, "candidate_diagnosis_id"),
+        "candidate_run_id": _public_field(source, "candidate_run_id"),
+        "changed_query_examples": [
+            _project_public_changed_example(item)
+            for item in _public_list(_public_field(source, "changed_query_examples"))
+        ],
+        "comparison": _project_public_comparison(_public_field(source, "comparison")),
+        "comparison_id": _public_field(source, "comparison_id"),
+        "diagnosis": _project_public_diagnosis(_public_field(source, "diagnosis")),
+        "diagnosis_id": _public_field(source, "diagnosis_id"),
+        "experiments": [
+            _project_public_experiment(item)
+            for item in _public_list(_public_field(source, "experiments"))
+        ],
+        "profile": _public_field(source, "profile"),
+        "proposal": _project_public_proposal(_public_field(source, "proposal")),
+        "retrieval_run_id": _public_field(source, "retrieval_run_id"),
+        "schema_version": _public_field(source, "schema_version"),
+        "status": _public_field(source, "status"),
+    }
+    public = PublicRetrievalAnalysisResponse.model_validate(projected, strict=True)
+    payload = public.model_dump(mode="json", by_alias=True)
+    _assert_public_retrieval_payload_safe(payload)
+    return payload
+
+
+def _get_cached_public_retrieval_analysis(
+    cache_key: tuple[str, str],
+) -> dict | None:
+    with _RETRIEVAL_ANALYSIS_CACHE_LOCK:
+        cached = _RETRIEVAL_ANALYSIS_CACHE.get(cache_key)
+        if cached is None:
+            return None
+        return copy.deepcopy(cached)
+
+
+def _store_cached_public_retrieval_analysis(
+    cache_key: tuple[str, str],
+    analysis: dict,
+) -> None:
+    with _RETRIEVAL_ANALYSIS_CACHE_LOCK:
+        _RETRIEVAL_ANALYSIS_CACHE[cache_key] = copy.deepcopy(analysis)
+        while len(_RETRIEVAL_ANALYSIS_CACHE) > _RETRIEVAL_ANALYSIS_CACHE_LIMIT:
+            oldest_key = next(iter(_RETRIEVAL_ANALYSIS_CACHE))
+            del _RETRIEVAL_ANALYSIS_CACHE[oldest_key]
+
+
+def _cached_public_retrieval_analysis(*, profile_id: Literal["smoke"]) -> dict:
+    revision = _api_code_revision(PROJECT_ROOT)
+    cache_key = (profile_id, revision)
+    cached = _get_cached_public_retrieval_analysis(cache_key)
+    if cached is not None:
+        logger.debug(
+            "public_retrieval_analysis_cache_hit",
+            extra={"profile_id": profile_id},
+        )
+        return cached
+
+    logger.debug(
+        "public_retrieval_analysis_cache_miss",
+        extra={"profile_id": profile_id},
+    )
+    if not _RETRIEVAL_ANALYSIS_LOCK.acquire(blocking=False):
+        logger.info(
+            "public_retrieval_analysis_rejected_busy",
+            extra={"profile_id": profile_id},
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "retrieval_analysis_in_progress",
+                "message": "Retrieval analysis is already running",
+                "trace_id": current_trace_id(),
+            },
+        )
+    try:
+        # The first request may have completed between the optimistic lookup and
+        # lock acquisition. Recheck so queued callers never repeat the work.
+        cached = _get_cached_public_retrieval_analysis(cache_key)
+        if cached is not None:
+            logger.debug(
+                "public_retrieval_analysis_cache_hit_after_lock",
+                extra={"profile_id": profile_id},
+            )
+            return cached
+        raw = generate_retrieval_runtime_analysis(
+            project_root=PROJECT_ROOT,
+            artifact_root=_agent_artifact_root(),
+            profile_id=profile_id,
+            revision_provider=lambda _root: revision,
+            # This route is anonymous. Never resolve process LLM configuration
+            # or construct a paid provider here, even when Owner mode is LLM.
+            planner=ObservationDrivenRetrievalPlanner(),
+        )
+        projected = _project_public_retrieval_analysis(raw)
+        _store_cached_public_retrieval_analysis(cache_key, projected)
+        logger.info(
+            "public_retrieval_analysis_cached",
+            extra={"profile_id": profile_id},
+        )
+        return copy.deepcopy(projected)
+    finally:
+        _RETRIEVAL_ANALYSIS_LOCK.release()
+
+
+def _owner_retrieval_analysis(*, profile_id: Literal["smoke"]) -> dict:
+    """Run the configured Planner behind the Owner-only reverse-proxy route."""
+
+    config = load_retrieval_planner_configuration()
+    planner = build_retrieval_planner(config)
+    revision = _api_code_revision(PROJECT_ROOT)
+    if not _RETRIEVAL_ANALYSIS_LOCK.acquire(blocking=False):
+        logger.info(
+            "owner_retrieval_analysis_rejected_busy",
+            extra={"profile_id": profile_id},
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "retrieval_analysis_in_progress",
+                "message": "Retrieval analysis is already running",
+                "trace_id": current_trace_id(),
+            },
+        )
+    try:
+        return generate_retrieval_runtime_analysis(
+            project_root=PROJECT_ROOT,
+            artifact_root=_agent_artifact_root(),
+            profile_id=profile_id,
+            revision_provider=lambda _root: revision,
+            planner=planner,
+        )
+    finally:
+        _RETRIEVAL_ANALYSIS_LOCK.release()
 
 
 class StrategyDecisionRequest(BaseModel):
@@ -1786,46 +2511,19 @@ def agent_retrieval_status() -> dict:
     }
 
 
-@app.post("/agent/retrieval/analyze", response_model=RetrievalAnalysisResponse)
+@app.post(
+    "/agent/retrieval/analyze",
+    response_model=PublicRetrievalAnalysisResponse,
+)
 def agent_retrieval_analyze(request: RetrievalAnalysisRequest) -> dict:
-    """Diagnose recall, fusion and coarse-rank evidence before proposing changes."""
+    """Return one cached, projected analysis for the public smoke profile."""
 
-    if not _RETRIEVAL_ANALYSIS_LOCK.acquire(blocking=False):
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "retrieval_analysis_in_progress",
-                "message": "Retrieval analysis is already running",
-                "trace_id": current_trace_id(),
-            },
-        )
     try:
-        config = load_retrieval_planner_configuration()
-        planner = build_retrieval_planner(config)
-        return generate_retrieval_runtime_analysis(
-            project_root=PROJECT_ROOT,
-            artifact_root=_agent_artifact_root(),
-            profile_id=request.profile,
-            revision_provider=_api_code_revision,
-            planner=planner,
-        )
-    except LLMPlannerConfigurationError as exc:
-        logger.error(
-            "agent_retrieval_planner_unavailable",
-            extra={"error_code": str(exc)},
-        )
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "code": "llm_planner_not_configured",
-                "message": "LLM retrieval Planner is not configured",
-                "trace_id": current_trace_id(),
-            },
-        ) from exc
+        return _cached_public_retrieval_analysis(profile_id=request.profile)
     except (OSError, RuntimeError, ValueError) as exc:
         trace_id = current_trace_id()
         logger.error(
-            "agent_retrieval_analysis_failed",
+            "public_retrieval_analysis_failed",
             extra={
                 "error_code": classify_error(exc),
                 "error_type": type(exc).__name__,
@@ -1839,8 +2537,47 @@ def agent_retrieval_analyze(request: RetrievalAnalysisRequest) -> dict:
                 "trace_id": trace_id,
             },
         ) from exc
-    finally:
-        _RETRIEVAL_ANALYSIS_LOCK.release()
+
+
+@app.post(
+    "/agent/retrieval/analyze-owner",
+    response_model=RetrievalAnalysisResponse,
+)
+def agent_retrieval_analyze_owner(request: RetrievalAnalysisRequest) -> dict:
+    """Run the configured deterministic or LLM Planner for the Owner."""
+
+    try:
+        return _owner_retrieval_analysis(profile_id=request.profile)
+    except LLMPlannerConfigurationError as exc:
+        logger.error(
+            "owner_retrieval_planner_unavailable",
+            extra={"error_code": str(exc)},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "llm_planner_not_configured",
+                "message": "LLM retrieval Planner is not configured",
+                "trace_id": current_trace_id(),
+            },
+        ) from exc
+    except (OSError, RuntimeError, ValueError) as exc:
+        trace_id = current_trace_id()
+        logger.error(
+            "owner_retrieval_analysis_failed",
+            extra={
+                "error_code": classify_error(exc),
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "retrieval_analysis_unavailable",
+                "message": "Retrieval analysis workflow unavailable",
+                "trace_id": trace_id,
+            },
+        ) from exc
 
 
 @app.post("/agent/eval/run", response_model=AgentEvalResponse)
