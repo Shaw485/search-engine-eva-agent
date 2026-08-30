@@ -30,6 +30,7 @@ from .llm_provider import (
     LLMWorkerSuccess,
     _canonical_json_bytes,
     _strict_json_loads,
+    provider_model_matches,
     response_id_sha256,
 )
 
@@ -105,18 +106,31 @@ def execute_request(
             _value(response, "status") != "completed"
             or _value(response, "error") is not None
         ):
-            raise _InvalidProviderResponse
-        reported_model = _required_string(response, "model")
-        if reported_model != request.model:
-            raise _InvalidProviderResponse
+            raise _InvalidProviderResponse("llm_provider_response_status_invalid")
+        try:
+            reported_model = _required_string(response, "model")
+        except _InvalidProviderResponse:
+            raise _InvalidProviderResponse(
+                "llm_provider_response_model_invalid"
+            ) from None
+        if not provider_model_matches(
+            request.provider,
+            request.model,
+            reported_model,
+        ):
+            raise _InvalidProviderResponse("llm_provider_response_model_mismatch")
         option_id = _extract_option_id(response, request.allowed_option_ids)
         usage = _extract_usage(response)
+        try:
+            response_id = _required_string(response, "id")
+        except _InvalidProviderResponse:
+            raise _InvalidProviderResponse("llm_provider_response_id_invalid") from None
         result = LLMDecisionResult(
             option_id=option_id,
             provider=request.provider,
             model=reported_model,
             token_usage=usage,
-            response_id_sha256=response_id_sha256(_required_string(response, "id")),
+            response_id_sha256=response_id_sha256(response_id),
             duration_ms=(time.perf_counter() - started) * 1000.0,
             attempt=1,
         )
@@ -223,7 +237,7 @@ def _decision_tool(allowed_option_ids: list[str]) -> dict[str, Any]:
 def _extract_option_id(response: Any, allowed_option_ids: list[str]) -> str:
     output = _value(response, "output")
     if not isinstance(output, (list, tuple)):
-        raise _InvalidProviderResponse
+        raise _InvalidProviderResponse("llm_provider_response_output_invalid")
     function_calls = [
         item for item in output if _value(item, "type") == "function_call"
     ]
@@ -237,7 +251,7 @@ def _extract_option_id(response: Any, allowed_option_ids: list[str]) -> str:
     call = function_calls[0]
     call_status = _value(call, "status")
     if call_status is not None and call_status != "completed":
-        raise _InvalidProviderResponse
+        raise _InvalidProviderResponse("llm_provider_response_output_invalid")
     if _value(call, "name") != DECISION_FUNCTION_NAME:
         raise _InvalidProviderDecision
     arguments = _value(call, "arguments")
@@ -264,7 +278,7 @@ def _extract_usage(response: Any) -> LLMTokenUsage:
             total_tokens=_required_int(usage, "total_tokens"),
         )
     except (TypeError, ValueError, ValidationError):
-        raise _InvalidProviderResponse from None
+        raise _InvalidProviderResponse("llm_provider_response_usage_invalid") from None
 
 
 def _value(value: Any, name: str) -> Any:
@@ -309,7 +323,7 @@ def _classify_provider_error(exc: BaseException) -> LLMProviderErrorCode:
     if isinstance(exc, _InvalidProviderDecision):
         return "llm_provider_invalid_decision"
     if isinstance(exc, _InvalidProviderResponse):
-        return "llm_provider_invalid_response"
+        return exc.error_code
     name = type(exc).__name__
     status = getattr(exc, "status_code", None)
     if name in {"APITimeoutError", "TimeoutException", "TimeoutError"} or status == 408:
@@ -324,7 +338,12 @@ def _classify_provider_error(exc: BaseException) -> LLMProviderErrorCode:
 
 
 class _InvalidProviderResponse(ValueError):
-    pass
+    def __init__(
+        self,
+        error_code: LLMProviderErrorCode = "llm_provider_invalid_response",
+    ) -> None:
+        self.error_code = error_code
+        super().__init__(error_code)
 
 
 class _InvalidProviderDecision(ValueError):

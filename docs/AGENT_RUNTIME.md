@@ -83,6 +83,14 @@ stores the Key. The worker has:
 - a hard parent deadline followed by terminate/kill;
 - stable error codes with third-party messages discarded.
 
+The configured model remains explicit. OpenAI responses must echo that model
+exactly. Agent Plan may report the actual resolved model name/version instead of
+the package alias: the adapter accepts only an exact normalized alias or a
+version suffix inside the same requested family. A different family or tier is
+rejected. Response status, model, output, usage and ID failures have distinct
+safe error codes so compatibility can be debugged without logging provider
+content.
+
 The LLM path allows at most six planning steps, four tool calls, four Run
 creations, one failure, one attempt per canonical action and 120 seconds. It
 also caps per-call output and cumulative model input/output Tokens. Exceeding a

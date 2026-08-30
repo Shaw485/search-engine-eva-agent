@@ -188,8 +188,14 @@ than granting either provider more evidence or execution authority.
    Base URL was correct, the configured credential type was a dedicated Agent
    Plan API Key, and `doubao-seed-2.1-turbo` was an available model while the
    launcher's former `doubao-seed-2.0-pro` value was not listed. The launcher
-   therefore pins `doubao-seed-2.1-turbo`. If the exact integration is
-   validated, record the
+   therefore pins `doubao-seed-2.1-turbo`. A later dedicated-Key request passed
+   authentication and returned in 6.3 seconds, but the original adapter rejected
+   the HTTP-success response before any Tool call because it assumed the reported
+   model must byte-for-byte equal the requested Agent Plan alias. The adapter now
+   accepts only an exact normalized alias or a versioned member of that same model
+   family, keeps exact matching for OpenAI, and emits separate privacy-safe status,
+   model, output, usage and response-ID validation codes. A real retry is still
+   required. If the exact integration is validated, record the
    successful retry's provider/model, bounded usage, status and stable outcome
    without storing request/response content or the Key.
 4. [ ] Compare deterministic, OpenAI and Volcengine Planner task success,

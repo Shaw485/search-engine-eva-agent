@@ -20,6 +20,7 @@ from search_quality.agent.llm_provider import (
     OpenAIResponsesDecisionProvider,
     RetrievalDecisionContext,
     VolcengineAgentPlanDecisionProvider,
+    provider_model_matches,
 )
 from search_quality.observability import configure_logging
 
@@ -31,10 +32,11 @@ def _request(
     allowed_option_ids: list[str] | None = None,
     provider_timeout_ms: int = 100,
     provider: str = "openai",
+    model: str = "gpt-test-model",
 ) -> LLMDecisionRequest:
     return LLMDecisionRequest(
         provider=provider,
-        model="gpt-test-model",
+        model=model,
         allowed_option_ids=allowed_option_ids or ["diagnose_baseline"],
         context=RetrievalDecisionContext(
             steps_used=0,
@@ -137,18 +139,22 @@ def test_worker_uses_one_strict_dynamic_function_and_returns_minimal_result(
 
 
 @pytest.mark.parametrize(
-    "response_change",
+    ("response_change", "expected_error"),
     [
-        {"status": "incomplete"},
-        {"status": None},
-        {"model": "different-model"},
-        {"model": None},
-        {"error": {"code": "provider_reported_error"}},
+        ({"status": "incomplete"}, "llm_provider_response_status_invalid"),
+        ({"status": None}, "llm_provider_response_status_invalid"),
+        ({"model": "different-model"}, "llm_provider_response_model_mismatch"),
+        ({"model": None}, "llm_provider_response_model_invalid"),
+        (
+            {"error": {"code": "provider_reported_error"}},
+            "llm_provider_response_status_invalid",
+        ),
     ],
 )
 def test_worker_rejects_incomplete_or_model_unbound_responses(
     monkeypatch: pytest.MonkeyPatch,
     response_change: dict[str, str | None],
+    expected_error: str,
 ) -> None:
     monkeypatch.setenv("SEARCH_LLM_API_KEY", SECRET_SENTINEL)
     response = _response()
@@ -162,7 +168,7 @@ def test_worker_rejects_incomplete_or_model_unbound_responses(
 
     assert envelope.model_dump(mode="json") == {
         "ok": False,
-        "error_code": "llm_provider_invalid_response",
+        "error_code": expected_error,
     }
 
 
@@ -180,8 +186,82 @@ def test_worker_rejects_an_incomplete_function_call(
 
     assert envelope.model_dump(mode="json") == {
         "ok": False,
-        "error_code": "llm_provider_invalid_response",
+        "error_code": "llm_provider_response_output_invalid",
     }
+
+
+def test_volcengine_model_alias_accepts_only_its_resolved_version_family() -> None:
+    assert provider_model_matches(
+        "volcengine_agent_plan",
+        "doubao-seed-2.1-turbo",
+        "doubao-seed-2.1-turbo",
+    )
+    assert provider_model_matches(
+        "volcengine_agent_plan",
+        "doubao-seed-2.1-turbo",
+        "doubao-seed-2-1-turbo-260830",
+    )
+    assert not provider_model_matches(
+        "volcengine_agent_plan",
+        "doubao-seed-2.1-turbo",
+        "doubao-seed-2-1-pro-260830",
+    )
+    assert not provider_model_matches(
+        "openai",
+        "gpt-test-model",
+        "gpt-test-model-2026-08-30",
+    )
+
+
+def test_volcengine_worker_accepts_and_audits_a_resolved_model_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "SEARCH_VOLCENGINE_AGENT_PLAN_API_KEY",
+        SECRET_SENTINEL,
+    )
+    response = _response()
+    response.model = "doubao-seed-2-1-turbo-260830"
+
+    envelope = llm_worker.execute_request(
+        _request(
+            provider="volcengine_agent_plan",
+            model="doubao-seed-2.1-turbo",
+        ),
+        client_factory=lambda _key, _timeout: _FakeClient(response),
+    )
+
+    assert envelope.ok is True
+    assert envelope.result.model == "doubao-seed-2-1-turbo-260830"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_error"),
+    [
+        ("usage", None, "llm_provider_response_usage_invalid"),
+        ("id", None, "llm_provider_response_id_invalid"),
+    ],
+)
+def test_worker_reports_privacy_safe_invalid_response_stage(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+    expected_error: str,
+) -> None:
+    monkeypatch.setenv("SEARCH_LLM_API_KEY", SECRET_SENTINEL)
+    response = _response()
+    setattr(response, field, value)
+
+    envelope = llm_worker.execute_request(
+        _request(),
+        client_factory=lambda _key, _timeout: _FakeClient(response),
+    )
+
+    assert envelope.model_dump(mode="json") == {
+        "ok": False,
+        "error_code": expected_error,
+    }
+    assert SECRET_SENTINEL not in envelope.model_dump_json()
 
 
 def test_sdk_client_is_pinned_to_official_endpoint_and_disables_retries(

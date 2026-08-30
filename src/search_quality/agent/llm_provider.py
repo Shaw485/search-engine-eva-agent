@@ -102,6 +102,38 @@ MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
 SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
 
+def provider_model_matches(
+    provider: LLMProviderId,
+    requested_model: str,
+    reported_model: str,
+) -> bool:
+    """Validate model provenance without assuming provider aliases echo exactly.
+
+    OpenAI keeps exact model binding. Volcengine's Responses contract reports
+    the actual resolved model name/version, while Agent Plan accepts a stable
+    package alias such as ``doubao-seed-2.1-turbo``. A resolved Volcengine
+    value may therefore append a version after normalizing dots to hyphens.
+    Only that exact family prefix is accepted; another tier or family still
+    fails closed.
+    """
+
+    if provider == OPENAI_PROVIDER_ID:
+        return reported_model == requested_model
+    if provider != VOLCENGINE_AGENT_PLAN_PROVIDER_ID:
+        return False
+
+    def normalize(value: str) -> str:
+        return "-".join(
+            part
+            for part in value.lower().replace(".", "-").replace("_", "-").split("-")
+            if part
+        )
+
+    requested = normalize(requested_model)
+    reported = normalize(reported_model)
+    return reported == requested or reported.startswith(f"{requested}-")
+
+
 class RetrievalMetricDeltas(StrictModel):
     """Aggregate-only evidence that is safe to send to the planner model."""
 
@@ -297,6 +329,12 @@ LLMProviderErrorCode: TypeAlias = Literal[
     "llm_provider_request_rejected",
     "llm_provider_unavailable",
     "llm_provider_invalid_response",
+    "llm_provider_response_status_invalid",
+    "llm_provider_response_model_invalid",
+    "llm_provider_response_model_mismatch",
+    "llm_provider_response_output_invalid",
+    "llm_provider_response_usage_invalid",
+    "llm_provider_response_id_invalid",
     "llm_provider_invalid_decision",
 ]
 
@@ -386,7 +424,11 @@ class _IsolatedResponsesDecisionProvider:
             result = envelope.result
             if (
                 result.provider != self.provider_id
-                or result.model != request.model
+                or not provider_model_matches(
+                    self.provider_id,
+                    request.model,
+                    result.model,
+                )
                 or result.option_id not in request.allowed_option_ids
             ):
                 raise LLMProviderError("llm_worker_invalid_response")
