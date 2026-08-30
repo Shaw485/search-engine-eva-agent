@@ -18,6 +18,9 @@ stderr. Normal CLI results remain on stdout.
 | `api` | HTTP request boundary and public failure correlation | `INFO` in systemd |
 | `backend` | Local/OpenSearch smoke lifecycle | `WARNING` |
 | `catalog` | Full-catalog index build, readiness and search timing | `WARNING` |
+| `catalog_index` | Streamed catalog v2 build, verification and atomic publication | `WARNING` |
+| `catalog_pipeline` | Catalog v2 recall channels, fusion and coarse-rank timing | `WARNING` |
+| `catalog_serving` | Active pointer resolution, validation, activation and rollback | `WARNING` |
 | `data` | Stage 1 validation and build lifecycle | `WARNING` |
 | `evaluation` | Baseline/Run comparison, validation and artifact storage | `WARNING` |
 | `ranking` | Per-Query Ranker diagnostics | `OFF` |
@@ -40,6 +43,7 @@ stderr. Normal CLI results remain on stdout.
 | `retrieval` | Label-blind recall channels, fusion, stage retention and retrieval Runs | `WARNING` |
 | `stage_diagnosis` | Stage evidence validation and bottleneck diagnosis | `WARNING` |
 | `retrieval_analysis` | Bounded experiment orchestration and artifact publication | `WARNING` |
+| `retrieval_release` | Immutable Retrieval proposal, Owner decision, validation outcome and rollback projection | `WARNING` |
 
 The library default is `WARNING`. Verbose ranking events are opt-in because one
 event per Query becomes noisy on larger profiles.
@@ -55,6 +59,9 @@ export SEARCH_LOG_LEVEL=WARNING
 export SEARCH_LOG_LEVEL_EVALUATION=INFO
 export SEARCH_LOG_LEVEL_RANKING=DEBUG
 export SEARCH_LOG_LEVEL_CATALOG=INFO
+export SEARCH_LOG_LEVEL_CATALOG_INDEX=INFO
+export SEARCH_LOG_LEVEL_CATALOG_PIPELINE=DEBUG
+export SEARCH_LOG_LEVEL_CATALOG_SERVING=INFO
 export SEARCH_LOG_LEVEL_AGENT_RUNTIME=DEBUG
 export SEARCH_LOG_LEVEL_AGENT_MODEL=INFO
 export SEARCH_LOG_LEVEL_AGENT_PROVIDER=INFO
@@ -69,6 +76,7 @@ export SEARCH_LOG_LEVEL_LAUNCHER_DIALOG=INFO
 export SEARCH_LOG_LEVEL_LAUNCHER_BACKEND=INFO
 export SEARCH_LOG_LEVEL_RETRIEVAL=DEBUG
 export SEARCH_LOG_LEVEL_RETRIEVAL_ANALYSIS=INFO
+export SEARCH_LOG_LEVEL_RETRIEVAL_RELEASE=INFO
 export SEARCH_LOG_LEVEL_STAGE_DIAGNOSIS=INFO
 ```
 
@@ -434,6 +442,12 @@ systemd-analyze cat-config systemd/journald.conf
    search and correlate the `catalog_search_completed` event using the API
    trace ID. Health status distinguishes a ready index from a missing/corrupt
    one without exposing its filesystem path.
+   For v2, enable `catalog_index`, `catalog_pipeline` and `catalog_serving`
+   independently. `catalog_index` isolates streamed batch/build failures;
+   `catalog_pipeline` isolates title/exact/multi-field, RRF and coarse counts;
+   `catalog_serving` isolates pointer compatibility, activation CAS, sentinel
+   and rollback. See `docs/CATALOG_V2_SERVING.md` for commands and artifact
+   semantics.
 7. `agent_runtime`: run `make agent-smoke` with only
    `agent_runtime=DEBUG`; filter by `trace_id`, `state` and `step`.
 8. `agent_model`: enable only `agent_model=DEBUG` to see deterministic or LLM
@@ -475,33 +489,46 @@ systemd-analyze cat-config systemd/journald.conf
     `agent_provider`. For the Owner route, verify the absence of public-cache
     events and enable `agent_model`/`agent_provider` only if its configured
     Planner is LLM.
-16. `agent_eval`: run `make agent-eval` with only `agent_eval=INFO`; filter by
+16. `retrieval_release`: enable only `retrieval_release=INFO`; filter by
+    `proposal_id`, `decision_id`, `outcome_id`, `rollback_id`, `lifecycle` or stable
+    `error_code`. Inspect private `retrieval-release-proposals/`,
+    `retrieval-release-decisions/`, `retrieval-release-outcomes/` and
+    `retrieval-release-rollbacks/` artifacts when the full config, validation
+    receipt or rollback receipt is required. Logs deliberately
+    omit Query/product evidence, actor identity, client action IDs, receipt
+    bodies, credentials and filesystem paths. Reproduce proposal creation,
+    Owner decision, serving-outcome recording and rollback projection
+    independently; `approved_for_validation` is not an active-strategy event,
+    and the authoritative serving pointer prevents a stale outcome from being
+    projected as active before its rollback record is published.
+17. `agent_eval`: run `make agent-eval` with only `agent_eval=INFO`; filter by
     `suite_id`, `task_id` or `evidence_id`. Enable `agent_runtime` or
     `agent_replay` separately only when that boundary is under investigation.
     Detailed Trace evidence remains private.
-17. `query_constructor`: run `make query-set-smoke` with only
+18. `query_constructor`: run `make query-set-smoke` with only
     `query_constructor=INFO`; filter by `query_set_id`. Inspect the private
     artifact for case text; logs deliberately expose only counts and hashes.
-18. `bad_case`: run `make bad-cases-smoke` with only `bad_case=DEBUG`; filter by
+19. `bad_case`: run `make bad-cases-smoke` with only `bad_case=DEBUG`; filter by
     `execution_id`, `diagnostic_id`, `failure_stage` and
     `completed_query_count`. Search text, product IDs/titles and exception
     messages never enter logs. Enable `catalog=INFO` separately to inspect the
     59-call boundary and interruptible SQL timing.
-19. `bad_case_supervisor`: enable only this module and filter by `execution_id`
+20. `bad_case_supervisor`: enable only this module and filter by `execution_id`
     or supervisor `receipt_id` to distinguish dispatch, hard deadline,
     TERM/KILL escalation and durable completion. Enable `bad_case_worker`
     separately only when child startup or envelope production is suspect.
-20. `diagnostic_experiments`: enable only this module while requesting a plan;
+21. `diagnostic_experiments`: enable only this module while requesting a plan;
     filter by `diagnostic_id`, `query_set_id`, `experiment_plan_id` or the
     allowlisted `strategy_id`. Inspect the private evidence artifacts when the
     plan details are required; they are intentionally absent from logs.
-21. `human_oracle`: enable only this module while creating/reviewing one batch;
+22. `human_oracle`: enable only this module while creating/reviewing one batch;
     filter by `oracle_batch_id`, `unit_id` or annotation ID. Inspect the private
     Oracle directories for immutable state. Reproduce intent-view, behavior
     replay, CAS conflict and seal independently; never export transient raw
     views or the principal-HMAC key with diagnostics.
 
-`tests/test_observability.py` and `tests/test_catalog_search.py` verify JSON structure, module isolation,
+`tests/test_observability.py`, `tests/test_catalog_search.py` and
+`tests/test_catalog_v2_serving.py` verify JSON structure, module isolation,
 redaction variants, error classification, stable events, low-noise defaults and
 handler de-duplication. Comparison CLI tests verify success correlation, real
 validation and storage failures, failure stages, and that all Query/product
@@ -521,6 +548,14 @@ strategy. Retrieval Runtime component and API tests also verify minimal
 capabilities, bounded retry, semantic action order, Trace/Replay consistency and
 that the browser summary contains evidence IDs and gate names rather than raw
 Query or product content.
+Retrieval-release tests independently verify content-addressed proposal
+publication, complete pipeline/config binding, semantic Run/Comparison/
+Diagnosis/Trace revalidation, proposal/parent CAS, client-action idempotency,
+the `pending_owner_review -> approved_for_validation/rejected` boundary,
+validation outcome recording and privacy-safe module isolation. Approval tests
+also assert that no active serving pointer is written; rollback tests verify
+receipt/from-revision binding, target-pointer CAS, exact idempotency and the
+fail-closed `rolled_back` catalog projection.
 Agent Eval tests verify all 12 static Oracles, deterministic evidence identity,
 dynamic execution receipts, Replay/tamper behavior, zero strategy writes and
 module-specific privacy. Query-constructor tests verify smoke-only authorization

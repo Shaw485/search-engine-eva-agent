@@ -49,6 +49,17 @@ class _FakeCatalogService:
         return _FakeCatalogResult()
 
 
+class _FakeInactiveCatalogService:
+    def readiness(self) -> dict:
+        return {
+            "index_id": "catalog-baseline-v1-0123456789ab",
+            "mode": "baseline",
+            "ready": True,
+            "strategy_id": "catalog-baseline-v1",
+            "strategy_revision": None,
+        }
+
+
 def _clear_retrieval_analysis_cache() -> None:
     with api._RETRIEVAL_ANALYSIS_CACHE_LOCK:
         api._RETRIEVAL_ANALYSIS_CACHE.clear()
@@ -1115,13 +1126,26 @@ def test_catalog_health_distinguishes_ready_and_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(api, "get_catalog_search_service", _FakeCatalogService)
+    monkeypatch.setattr(
+        api,
+        "get_active_catalog_search_service",
+        _FakeInactiveCatalogService,
+    )
     assert api.health() == {
+        "active_serving": {
+            "index_id": "catalog-baseline-v1-0123456789ab",
+            "mode": "baseline",
+            "ready": False,
+            "status": "inactive",
+            "strategy_id": "catalog-baseline-v1",
+            "strategy_revision": None,
+        },
         "catalog": {
             "index_id": "catalog-baseline-v1-0123456789ab",
             "product_count": 1,
             "status": "ready",
         },
-        "stage": "catalog-baseline",
+        "stage": "catalog-baseline-plus-active-retrieval",
         "status": "ok",
     }
 
@@ -1130,8 +1154,16 @@ def test_catalog_health_distinguishes_ready_and_unavailable(
 
     monkeypatch.setattr(api, "get_catalog_search_service", unavailable)
     assert api.health() == {
+        "active_serving": {
+            "index_id": "catalog-baseline-v1-0123456789ab",
+            "mode": "baseline",
+            "ready": False,
+            "status": "inactive",
+            "strategy_id": "catalog-baseline-v1",
+            "strategy_revision": None,
+        },
         "catalog": {"status": "unavailable"},
-        "stage": "catalog-baseline",
+        "stage": "catalog-baseline-plus-active-retrieval",
         "status": "ok",
     }
 

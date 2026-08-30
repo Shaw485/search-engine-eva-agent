@@ -1028,6 +1028,15 @@ def test_api_strategy_routes_return_contracts(monkeypatch: pytest.MonkeyPatch) -
         "load_strategy_catalog",
         lambda **_kwargs: {"schema_version": "search-strategy-catalog-v1"},
     )
+    monkeypatch.setattr(
+        api,
+        "load_retrieval_release_catalog",
+        lambda **_kwargs: {
+            "active_retrieval_release": None,
+            "releases": [],
+            "schema_version": "retrieval-release-catalog-v1",
+        },
+    )
 
     assert api.agent_strategy_propose(api.StrategyProposalRequest()) == {
         "proposal_id": "proposal-aaaaaaaaaaaa"
@@ -1041,7 +1050,10 @@ def test_api_strategy_routes_return_contracts(monkeypatch: pytest.MonkeyPatch) -
     ) == {"decision_id": "decision-bbbbbbbbbbbb"}
     assert decision_calls[0]["revision_provider"] is api._api_code_revision
     assert api.agent_strategy_catalog() == {
-        "schema_version": "search-strategy-catalog-v1"
+        "active_retrieval_release": None,
+        "retrieval_release_schema_version": "retrieval-release-catalog-v1",
+        "retrieval_releases": [],
+        "schema_version": "search-strategy-catalog-v1",
     }
 
 

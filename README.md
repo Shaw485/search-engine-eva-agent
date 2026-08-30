@@ -112,6 +112,7 @@ explicit pending integration check, not an implicit fallback or a claimed pass.
 - Stage 1 evidence: [docs/STAGE_1_REPORT.md](docs/STAGE_1_REPORT.md)
 - Stage 2 smoke evidence: [docs/STAGE_2_SMOKE_REPORT.md](docs/STAGE_2_SMOKE_REPORT.md)
 - Full-catalog build/API evidence: [docs/FULL_CATALOG_BASELINE_REPORT.md](docs/FULL_CATALOG_BASELINE_REPORT.md)
+- Catalog v2 active-serving guide: [docs/CATALOG_V2_SERVING.md](docs/CATALOG_V2_SERVING.md)
 - Data dictionary: [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md)
 - Backend decision: [docs/adr/001-search-backend.md](docs/adr/001-search-backend.md)
 - Full-catalog baseline decision: [docs/adr/002-full-catalog-baseline.md](docs/adr/002-full-catalog-baseline.md)
@@ -208,6 +209,10 @@ make data-esci-build
 After the pinned source is present, `make catalog-index` builds the ignored
 full-catalog artifact at `data/index/catalog-baseline-v1.sqlite3`. The command
 requires a clean Git revision so the index identity can record the exact code.
+`make catalog-index-v2` is the separately streamed full-field build used by the
+approved active canary lane. Its 1,814,924-product artifact is not built during
+normal tests or committed to Git; use the resource and activation gates in
+`docs/CATALOG_V2_SERVING.md` before production publication.
 
 Start the Stage 0 API with:
 

@@ -30,10 +30,32 @@ def test_api_health_and_smoke(monkeypatch: pytest.MonkeyPatch) -> None:
     def unavailable():
         raise FileNotFoundError("catalog fixture intentionally absent")
 
+    class InactiveServing:
+        def readiness(self):
+            return {
+                "index_id": "catalog-baseline-v1-fixture",
+                "mode": "baseline",
+                "ready": True,
+                "strategy_id": "catalog-baseline-v1",
+                "strategy_revision": None,
+            }
+
     monkeypatch.setattr("apps.api.main.get_catalog_search_service", unavailable)
+    monkeypatch.setattr(
+        "apps.api.main.get_active_catalog_search_service",
+        InactiveServing,
+    )
     assert health() == {
+        "active_serving": {
+            "index_id": "catalog-baseline-v1-fixture",
+            "mode": "baseline",
+            "ready": False,
+            "status": "inactive",
+            "strategy_id": "catalog-baseline-v1",
+            "strategy_revision": None,
+        },
         "catalog": {"status": "unavailable"},
-        "stage": "catalog-baseline",
+        "stage": "catalog-baseline-plus-active-retrieval",
         "status": "ok",
     }
     assert (

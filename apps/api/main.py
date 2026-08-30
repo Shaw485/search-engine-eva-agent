@@ -6,10 +6,12 @@ import copy
 import logging
 import os
 import re
+import secrets
 import sqlite3
 import threading
 import time
 from collections import Counter
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from hashlib import sha256
 from hmac import compare_digest
@@ -35,6 +37,17 @@ from search_quality.agent.optimization import (
     load_strategy_catalog,
 )
 from search_quality.agent.retrieval_planner import ObservationDrivenRetrievalPlanner
+from search_quality.agent.retrieval_release_control import (
+    RetrievalReleaseError,
+    apply_retrieval_release_decision,
+    build_retrieval_validation_failure_receipt,
+    create_or_load_retrieval_proposal,
+    load_retrieval_activation_envelope,
+    load_retrieval_release,
+    load_retrieval_release_catalog,
+    record_retrieval_release_outcome,
+    record_retrieval_release_rollback,
+)
 from search_quality.agent.retrieval_runtime import generate_retrieval_runtime_analysis
 from search_quality.agent_eval.runner import run_agent_eval_suite
 from search_quality.bad_cases.artifacts import BadCaseRunInProgress
@@ -53,8 +66,14 @@ from search_quality.bad_cases.supervisor import (
 )
 from search_quality.catalog import (
     DEFAULT_CATALOG_INDEX,
+    DEFAULT_CATALOG_V2_INDEX,
+    ActiveCatalogSearchService,
     CatalogSearchService,
     InvalidCatalogQuery,
+    RetrievalServingError,
+    load_active_retrieval_revision,
+    rollback_retrieval_strategy,
+    validate_and_activate_retrieval_strategy,
 )
 from search_quality.diagnostic_experiments import (
     DiagnosticExperimentPlan,
@@ -113,9 +132,13 @@ _AGENT_EVAL_LOCK = threading.Lock()
 _RETRIEVAL_ANALYSIS_LOCK = threading.Lock()
 _BAD_CASE_LOCK = threading.Lock()
 _RETRIEVAL_ANALYSIS_CACHE_LOCK = threading.Lock()
+_RETRIEVAL_RELEASE_SESSION_LOCK = threading.Lock()
 _AGENT_PROPOSAL_CACHE: dict[tuple[str, str, str, str], dict] = {}
 _RETRIEVAL_ANALYSIS_CACHE: dict[tuple[str, str], dict] = {}
 _RETRIEVAL_ANALYSIS_CACHE_LIMIT = 4
+_RETRIEVAL_RELEASE_SESSION_LIMIT = 256
+_RETRIEVAL_RELEASE_SESSION_TTL_SECONDS = 300
+_RETRIEVAL_RELEASE_SESSIONS: dict[str, dict] = {}
 _PUBLIC_RETRIEVAL_SENSITIVE_KEY_PARTS = frozenset(
     {
         "authorization",
@@ -275,7 +298,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:4173", "http://localhost:4173"],
     allow_methods=["GET", "POST"],
-    allow_headers=["Accept", "Content-Type"],
+    allow_headers=["Accept", "Content-Type", "X-Search-Approval-Token"],
     expose_headers=["X-Request-ID"],
 )
 
@@ -303,6 +326,9 @@ async def request_diagnostics(request: Request, call_next):
                 "/agent/strategy/propose",
                 "/agent/retrieval/analyze",
                 "/agent/retrieval/analyze-owner",
+                "/agent/retrieval/release/decision",
+                "/agent/retrieval/release/rollback",
+                "/agent/retrieval/release/session",
                 "/agent/retrieval/status",
                 "/agent/eval/run",
                 "/agent/bad-cases/run",
@@ -316,6 +342,7 @@ async def request_diagnostics(request: Request, call_next):
                 "/agent/human-oracle/intents/view",
                 "/agent/query-constructor/build",
                 "/catalog/search",
+                "/catalog/search/active",
                 "/health",
                 "/smoke",
             }
@@ -366,6 +393,13 @@ def _catalog_index_path() -> Path:
     return Path(__file__).resolve().parents[2] / DEFAULT_CATALOG_INDEX
 
 
+def _catalog_active_index_path() -> Path:
+    configured = os.environ.get("SEARCH_CATALOG_ACTIVE_INDEX")
+    if configured:
+        return Path(configured)
+    return Path(__file__).resolve().parents[2] / DEFAULT_CATALOG_V2_INDEX
+
+
 @lru_cache(maxsize=4)
 def _cached_catalog_service(index_path: str) -> CatalogSearchService:
     return CatalogSearchService(index_path)
@@ -373,6 +407,27 @@ def _cached_catalog_service(index_path: str) -> CatalogSearchService:
 
 def get_catalog_search_service() -> CatalogSearchService:
     return _cached_catalog_service(str(_catalog_index_path()))
+
+
+@lru_cache(maxsize=4)
+def _cached_active_catalog_service(
+    baseline_index_path: str,
+    active_index_path: str,
+    artifact_root: str,
+) -> ActiveCatalogSearchService:
+    return ActiveCatalogSearchService(
+        baseline_index_path=baseline_index_path,
+        active_index_path=active_index_path,
+        artifact_root=artifact_root,
+    )
+
+
+def get_active_catalog_search_service() -> ActiveCatalogSearchService:
+    return _cached_active_catalog_service(
+        str(_catalog_index_path()),
+        str(_catalog_active_index_path()),
+        str(_runtime_artifact_root()),
+    )
 
 
 @app.get("/health")
@@ -387,7 +442,38 @@ def health() -> dict:
             "product_count": metadata.product_count,
             "status": "ready",
         }
-    return {"catalog": catalog, "stage": "catalog-baseline", "status": "ok"}
+    try:
+        serving = get_active_catalog_search_service().readiness()
+    except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
+        logger.error(
+            "active_catalog_readiness_failed",
+            extra={
+                "error_code": classify_error(exc),
+                "error_type": type(exc).__name__,
+            },
+        )
+        serving = {
+            "error_code": "retrieval_serving_unavailable",
+            "ready": False,
+        }
+    active_ready = serving.get("ready") is True and serving.get("mode") == "v2"
+    active_serving = {
+        **serving,
+        "ready": active_ready,
+        "status": (
+            "active"
+            if active_ready
+            else "inactive"
+            if serving.get("ready") is True
+            else "unavailable"
+        ),
+    }
+    return {
+        "active_serving": active_serving,
+        "catalog": catalog,
+        "stage": "catalog-baseline-plus-active-retrieval",
+        "status": "ok",
+    }
 
 
 class SmokeRequest(BaseModel):
@@ -403,6 +489,37 @@ class CatalogSearchRequest(BaseModel):
 
     query: str = Field(min_length=1, max_length=200)
     top_k: int = Field(default=10, ge=1, le=20)
+
+
+class RetrievalReleaseSessionRequest(BaseModel):
+    """Create one short-lived, action-bound Owner approval token."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    proposal_id: str = Field(pattern=r"^retrieval-proposal-[0-9a-f]{12}$")
+    proposal_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    action: Literal["decision", "rollback"] = "decision"
+
+
+class RetrievalReleaseDecisionRequest(BaseModel):
+    """One idempotent Owner decision; approval still requires validation."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    proposal_id: str = Field(pattern=r"^retrieval-proposal-[0-9a-f]{12}$")
+    proposal_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    decision: Literal["approve", "reject"]
+    client_action_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+
+class RetrievalReleaseRollbackRequest(BaseModel):
+    """CAS-protected rollback of the currently active retrieval revision."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expected_active_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    target_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    client_action_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 class StrategyProposalRequest(BaseModel):
@@ -904,6 +1021,96 @@ def _human_oracle_actor_from_request(request: Request) -> OracleActor:
         principal_hmac_sha256=principal_hmac,
         actor_key_id=actor_key_id,
     )
+
+
+def _create_retrieval_release_session(
+    *,
+    actor_id: str,
+    proposal_id: str,
+    proposal_revision: str,
+    action: Literal["decision", "rollback"],
+) -> tuple[str, str]:
+    """Store only a digest of a bounded, short-lived, action-bound token."""
+
+    token = secrets.token_urlsafe(32)
+    token_digest = sha256(token.encode("utf-8")).hexdigest()
+    expires_monotonic = time.monotonic() + _RETRIEVAL_RELEASE_SESSION_TTL_SECONDS
+    expires_at = datetime.now(UTC) + timedelta(
+        seconds=_RETRIEVAL_RELEASE_SESSION_TTL_SECONDS
+    )
+    with _RETRIEVAL_RELEASE_SESSION_LOCK:
+        now = time.monotonic()
+        expired = [
+            digest
+            for digest, session in _RETRIEVAL_RELEASE_SESSIONS.items()
+            if session["expires_monotonic"] <= now
+        ]
+        for digest in expired:
+            del _RETRIEVAL_RELEASE_SESSIONS[digest]
+        if len(_RETRIEVAL_RELEASE_SESSIONS) >= _RETRIEVAL_RELEASE_SESSION_LIMIT:
+            oldest = min(
+                _RETRIEVAL_RELEASE_SESSIONS,
+                key=lambda digest: _RETRIEVAL_RELEASE_SESSIONS[digest][
+                    "expires_monotonic"
+                ],
+            )
+            del _RETRIEVAL_RELEASE_SESSIONS[oldest]
+        _RETRIEVAL_RELEASE_SESSIONS[token_digest] = {
+            "action": action,
+            "actor_id": actor_id,
+            "expires_monotonic": expires_monotonic,
+            "proposal_id": proposal_id,
+            "proposal_revision": proposal_revision,
+        }
+    return token, expires_at.isoformat().replace("+00:00", "Z")
+
+
+def _consume_retrieval_release_session(
+    request: Request,
+    *,
+    actor_id: str,
+    action: Literal["decision", "rollback"],
+    proposal_id: str | None = None,
+    proposal_revision: str | None = None,
+) -> dict:
+    raw_token = request.headers.get("x-search-approval-token")
+    if raw_token is None or not 32 <= len(raw_token) <= 512:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "approval_session_invalid",
+                "message": "Approval session is invalid or expired",
+                "trace_id": current_trace_id(),
+            },
+        )
+    token_digest = sha256(raw_token.encode("utf-8")).hexdigest()
+    with _RETRIEVAL_RELEASE_SESSION_LOCK:
+        session = _RETRIEVAL_RELEASE_SESSIONS.pop(token_digest, None)
+    valid = (
+        session is not None
+        and session["expires_monotonic"] > time.monotonic()
+        and session["actor_id"] == actor_id
+        and session["action"] == action
+        and (proposal_id is None or session["proposal_id"] == proposal_id)
+        and (
+            proposal_revision is None
+            or session["proposal_revision"] == proposal_revision
+        )
+    )
+    if not valid:
+        logger.warning(
+            "retrieval_release_session_rejected",
+            extra={"error_code": "approval_session_invalid"},
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "approval_session_invalid",
+                "message": "Approval session is invalid or expired",
+                "trace_id": current_trace_id(),
+            },
+        )
+    return session
 
 
 def _human_oracle_repository() -> HumanOracleRepository:
@@ -1809,6 +2016,16 @@ class PublicRetrievalProposalResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     candidate_strategy_id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,127}$")
+    proposal_id: str | None = Field(
+        default=None,
+        pattern=r"^retrieval-proposal-[0-9a-f]{12}$",
+    )
+    proposal_revision: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    lifecycle: Literal["rejected_by_gate", "pending_owner_review"]
+    approval_eligible: bool
     decision: Literal["request_owner_review", "reject_candidate"]
     next_action: Literal[
         "request_owner_review",
@@ -1816,6 +2033,17 @@ class PublicRetrievalProposalResponse(BaseModel):
         "replace_recall_candidate",
     ]
     reason: str = Field(min_length=1, max_length=512)
+
+    @model_validator(mode="after")
+    def validate_release_reference(self) -> Self:
+        reviewable = self.lifecycle == "pending_owner_review"
+        if self.approval_eligible is not reviewable:
+            raise ValueError("proposal approval eligibility is inconsistent")
+        if reviewable != (
+            self.proposal_id is not None and self.proposal_revision is not None
+        ):
+            raise ValueError("proposal release reference is inconsistent")
+        return self
 
 
 class PublicRetrievalAnalysisResponse(BaseModel):
@@ -2071,12 +2299,35 @@ def _project_public_experiment(value: object) -> dict:
     }
 
 
-def _project_public_proposal(value: object) -> dict:
+def _project_public_proposal(
+    value: object,
+    *,
+    release: dict | None = None,
+) -> dict:
     source = _public_mapping(value)
-    return {
+    projected = {
         key: _public_field(source, key)
         for key in ("candidate_strategy_id", "decision", "next_action", "reason")
     }
+    if release is None:
+        projected.update(
+            {
+                "approval_eligible": False,
+                "lifecycle": "rejected_by_gate",
+                "proposal_id": None,
+                "proposal_revision": None,
+            }
+        )
+    else:
+        projected.update(
+            {
+                "approval_eligible": True,
+                "lifecycle": "pending_owner_review",
+                "proposal_id": _public_field(release, "proposal_id"),
+                "proposal_revision": _public_field(release, "proposal_revision"),
+            }
+        )
+    return projected
 
 
 def _project_public_changed_example(value: object) -> dict:
@@ -2192,7 +2443,11 @@ def _project_public_comparison(value: object) -> dict:
     }
 
 
-def _project_public_retrieval_analysis(analysis: dict) -> dict:
+def _project_public_retrieval_analysis(
+    analysis: dict,
+    *,
+    release: dict | None = None,
+) -> dict:
     """Recursively pick only browser-required fields from trusted evidence."""
 
     validated = RetrievalAnalysisResponse.model_validate(analysis, strict=True)
@@ -2217,7 +2472,10 @@ def _project_public_retrieval_analysis(analysis: dict) -> dict:
             for item in _public_list(_public_field(source, "experiments"))
         ],
         "profile": _public_field(source, "profile"),
-        "proposal": _project_public_proposal(_public_field(source, "proposal")),
+        "proposal": _project_public_proposal(
+            _public_field(source, "proposal"),
+            release=release,
+        ),
         "retrieval_run_id": _public_field(source, "retrieval_run_id"),
         "schema_version": _public_field(source, "schema_version"),
         "status": _public_field(source, "status"),
@@ -2247,6 +2505,28 @@ def _store_cached_public_retrieval_analysis(
         while len(_RETRIEVAL_ANALYSIS_CACHE) > _RETRIEVAL_ANALYSIS_CACHE_LIMIT:
             oldest_key = next(iter(_RETRIEVAL_ANALYSIS_CACHE))
             del _RETRIEVAL_ANALYSIS_CACHE[oldest_key]
+
+
+def _clear_public_retrieval_analysis_cache() -> None:
+    with _RETRIEVAL_ANALYSIS_CACHE_LOCK:
+        _RETRIEVAL_ANALYSIS_CACHE.clear()
+
+
+def _formalize_retrieval_analysis(
+    analysis: dict,
+    *,
+    revision: str,
+) -> dict | None:
+    """Create the immutable control-plane proposal only after all gates pass."""
+
+    if analysis.get("status") != "proposal_ready":
+        return None
+    return create_or_load_retrieval_proposal(
+        analysis,
+        project_root=PROJECT_ROOT,
+        artifact_root=_runtime_artifact_root(),
+        revision_provider=lambda _root: revision,
+    )
 
 
 def _cached_public_retrieval_analysis(*, profile_id: Literal["smoke"]) -> dict:
@@ -2296,7 +2576,12 @@ def _cached_public_retrieval_analysis(*, profile_id: Literal["smoke"]) -> dict:
             # or construct a paid provider here, even when Owner mode is LLM.
             planner=ObservationDrivenRetrievalPlanner(),
         )
-        projected = _project_public_retrieval_analysis(raw)
+        release = _formalize_retrieval_analysis(raw, revision=revision)
+        projected = (
+            _project_public_retrieval_analysis(raw, release=release)
+            if release is not None
+            else _project_public_retrieval_analysis(raw)
+        )
         _store_cached_public_retrieval_analysis(cache_key, projected)
         logger.info(
             "public_retrieval_analysis_cached",
@@ -2327,13 +2612,29 @@ def _owner_retrieval_analysis(*, profile_id: Literal["smoke"]) -> dict:
             },
         )
     try:
-        return generate_retrieval_runtime_analysis(
+        analysis = generate_retrieval_runtime_analysis(
             project_root=PROJECT_ROOT,
             artifact_root=_agent_artifact_root(),
             profile_id=profile_id,
             revision_provider=lambda _root: revision,
             planner=planner,
         )
+        release = _formalize_retrieval_analysis(analysis, revision=revision)
+        if release is not None:
+            analysis["proposal"] = {
+                **analysis["proposal"],
+                "approval_eligible": True,
+                "lifecycle": release["lifecycle"],
+                "proposal_id": release["proposal_id"],
+                "proposal_revision": release["proposal_revision"],
+            }
+        elif isinstance(analysis.get("proposal"), dict):
+            analysis["proposal"] = {
+                **analysis["proposal"],
+                "approval_eligible": False,
+                "lifecycle": "rejected_by_gate",
+            }
+        return analysis
     finally:
         _RETRIEVAL_ANALYSIS_LOCK.release()
 
@@ -2424,6 +2725,106 @@ def catalog_search_post(request: CatalogSearchRequest) -> dict:
             detail={
                 "code": "catalog_search_unavailable",
                 "message": "Catalog search unavailable",
+                "trace_id": trace_id,
+            },
+        ) from exc
+
+
+@app.post("/catalog/search/active")
+def catalog_search_active_post(request: CatalogSearchRequest) -> dict:
+    """Search only the actually activated retrieval lane; never fake a fallback."""
+
+    try:
+        service = get_active_catalog_search_service()
+        readiness = service.readiness()
+    except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
+        logger.error(
+            "active_catalog_readiness_failed",
+            extra={
+                "error_code": classify_error(exc),
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "active_catalog_search_unavailable",
+                "message": "Active catalog search unavailable",
+                "trace_id": current_trace_id(),
+            },
+        ) from exc
+    if readiness.get("ready") is not True and readiness.get("error_code"):
+        logger.error(
+            "active_catalog_search_rejected_unhealthy",
+            extra={"error_code": readiness["error_code"]},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "active_catalog_search_unavailable",
+                "message": "Active catalog search unavailable",
+                "trace_id": current_trace_id(),
+            },
+        )
+    if readiness.get("ready") is not True or readiness.get("mode") != "v2":
+        logger.info(
+            "active_catalog_search_rejected_inactive",
+            extra={"error_code": readiness.get("error_code", "active_not_released")},
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "active_strategy_unavailable",
+                "message": "No retrieval strategy is currently active",
+                "trace_id": current_trace_id(),
+            },
+        )
+    if request.top_k > 10:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_catalog_top_k",
+                "message": "Active search top_k must be between 1 and 10",
+                "trace_id": current_trace_id(),
+            },
+        )
+    try:
+        result = service.search(request.query, top_k=request.top_k).to_dict()
+        result["execution"] = {
+            "channels": result["channel_counts"],
+            "index_id": result["index_id"],
+            "lane": "active",
+            "strategy_id": result["strategy_id"],
+            "strategy_revision": result["strategy_revision"],
+        }
+        return result
+    except InvalidCatalogQuery as exc:
+        logger.debug(
+            "active_catalog_query_rejected",
+            extra={"error_code": "invalid_catalog_query"},
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_catalog_query",
+                "message": "Search query is invalid",
+                "trace_id": current_trace_id(),
+            },
+        ) from exc
+    except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
+        trace_id = current_trace_id()
+        logger.error(
+            "active_catalog_search_failed",
+            extra={
+                "error_code": classify_error(exc),
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "active_catalog_search_unavailable",
+                "message": "Active catalog search unavailable",
                 "trace_id": trace_id,
             },
         ) from exc
@@ -2578,6 +2979,293 @@ def agent_retrieval_analyze_owner(request: RetrievalAnalysisRequest) -> dict:
                 "trace_id": trace_id,
             },
         ) from exc
+
+
+def _retrieval_release_projection(proposal_id: str) -> dict:
+    catalog = load_retrieval_release_catalog(
+        project_root=PROJECT_ROOT,
+        artifact_root=_runtime_artifact_root(),
+    )
+    release = next(
+        (
+            item
+            for item in catalog["releases"]
+            if item.get("proposal_id") == proposal_id
+        ),
+        None,
+    )
+    if release is None:
+        raise RetrievalReleaseError(
+            "release_catalog_conflict",
+            "retrieval release is missing from the catalog",
+        )
+    return {
+        "active_retrieval_release": catalog["active_retrieval_release"],
+        "lifecycle": release["lifecycle"],
+        "proposal_id": release["proposal_id"],
+        "proposal_revision": release["proposal_revision"],
+        "release": release,
+        "schema_version": "retrieval-release-api-response-v1",
+    }
+
+
+def _raise_retrieval_release_api_error(
+    *,
+    operation: str,
+    error: Exception,
+) -> None:
+    code = getattr(error, "code", None) or getattr(error, "error_code", None)
+    if not isinstance(code, str) or re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code) is None:
+        code = "retrieval_release_unavailable"
+    conflict = isinstance(error, (RetrievalReleaseError, RetrievalServingError))
+    logger.warning(
+        "retrieval_release_api_failed" if conflict else "retrieval_release_api_error",
+        extra={
+            "error_code": code,
+            "error_type": type(error).__name__,
+            "operation": operation,
+        },
+    )
+    raise HTTPException(
+        status_code=409 if conflict else 503,
+        detail={
+            "code": code,
+            "message": (
+                "Retrieval release state changed; refresh and retry"
+                if conflict
+                else "Retrieval release workflow unavailable"
+            ),
+            "trace_id": current_trace_id(),
+        },
+    ) from error
+
+
+@app.post("/agent/retrieval/release/session")
+def retrieval_release_session(
+    payload: RetrievalReleaseSessionRequest,
+    http_request: Request,
+) -> dict:
+    """Create a single-use Owner token without exposing Basic credentials."""
+
+    actor = _human_oracle_actor_from_request(http_request)
+    try:
+        release = load_retrieval_release(
+            project_root=PROJECT_ROOT,
+            artifact_root=_runtime_artifact_root(),
+            proposal_id=payload.proposal_id,
+            proposal_revision=payload.proposal_revision,
+        )
+        if payload.action == "decision" and release["lifecycle"] != (
+            "pending_owner_review"
+        ):
+            raise RetrievalReleaseError(
+                "release_not_pending_review",
+                "retrieval release is not pending Owner review",
+            )
+        if payload.action == "rollback":
+            outcome = release.get("outcome")
+            active_revision = load_active_retrieval_revision(_runtime_artifact_root())
+            if (
+                release["lifecycle"] != "active"
+                or not isinstance(outcome, dict)
+                or outcome.get("active_strategy_revision") != active_revision
+            ):
+                raise RetrievalReleaseError(
+                    "release_not_active",
+                    "retrieval release is not the active serving revision",
+                )
+        token, expires_at = _create_retrieval_release_session(
+            actor_id=actor.principal_hmac_sha256,
+            proposal_id=payload.proposal_id,
+            proposal_revision=payload.proposal_revision,
+            action=payload.action,
+        )
+        logger.info(
+            "retrieval_release_session_created",
+            extra={
+                "action": payload.action,
+                "proposal_id": payload.proposal_id,
+            },
+        )
+        return {
+            "csrf_token": token,
+            "expires_at": expires_at,
+            "proposal_id": payload.proposal_id,
+            "proposal_revision": payload.proposal_revision,
+            "schema_version": "retrieval-release-session-v1",
+        }
+    except HTTPException:
+        raise
+    except (OSError, RuntimeError, ValueError) as exc:
+        _raise_retrieval_release_api_error(operation="session", error=exc)
+
+
+@app.post("/agent/retrieval/release/decision")
+def retrieval_release_decision(
+    payload: RetrievalReleaseDecisionRequest,
+    http_request: Request,
+) -> dict:
+    """Record the Owner decision and activate only after automatic validation."""
+
+    actor = _human_oracle_actor_from_request(http_request)
+    _consume_retrieval_release_session(
+        http_request,
+        actor_id=actor.principal_hmac_sha256,
+        action="decision",
+        proposal_id=payload.proposal_id,
+        proposal_revision=payload.proposal_revision,
+    )
+    try:
+        apply_retrieval_release_decision(
+            project_root=PROJECT_ROOT,
+            artifact_root=_runtime_artifact_root(),
+            proposal_id=payload.proposal_id,
+            proposal_revision=payload.proposal_revision,
+            decision=payload.decision,
+            client_action_id=payload.client_action_id,
+            actor_id=actor.principal_hmac_sha256,
+            revision_provider=_api_code_revision,
+        )
+        if payload.decision == "reject":
+            _clear_public_retrieval_analysis_cache()
+            return _retrieval_release_projection(payload.proposal_id)
+
+        release = load_retrieval_release(
+            project_root=PROJECT_ROOT,
+            artifact_root=_runtime_artifact_root(),
+            proposal_id=payload.proposal_id,
+            proposal_revision=payload.proposal_revision,
+        )
+        proposal = release["proposal"]
+        try:
+            envelope = load_retrieval_activation_envelope(
+                project_root=PROJECT_ROOT,
+                artifact_root=_runtime_artifact_root(),
+                proposal_id=payload.proposal_id,
+                proposal_revision=payload.proposal_revision,
+            )
+            receipt = validate_and_activate_retrieval_strategy(
+                envelope,
+                _catalog_index_path(),
+                _catalog_active_index_path(),
+                _runtime_artifact_root(),
+                _api_code_revision,
+            )
+        except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
+            failure_code = getattr(exc, "error_code", None) or getattr(
+                exc,
+                "code",
+                None,
+            )
+            if (
+                not isinstance(failure_code, str)
+                or re.fullmatch(r"[a-z][a-z0-9_]{0,63}", failure_code) is None
+            ):
+                failure_code = "retrieval_validation_failed"
+            failure_receipt = build_retrieval_validation_failure_receipt(
+                proposal,
+                error_code=failure_code,
+            )
+            record_retrieval_release_outcome(
+                project_root=PROJECT_ROOT,
+                artifact_root=_runtime_artifact_root(),
+                proposal_id=payload.proposal_id,
+                proposal_revision=payload.proposal_revision,
+                outcome="validation_failed",
+                validation_receipt=failure_receipt,
+                active_strategy_revision=None,
+            )
+            logger.warning(
+                "retrieval_release_validation_failed",
+                extra={
+                    "error_code": failure_code,
+                    "proposal_id": payload.proposal_id,
+                },
+            )
+        else:
+            record_retrieval_release_outcome(
+                project_root=PROJECT_ROOT,
+                artifact_root=_runtime_artifact_root(),
+                proposal_id=payload.proposal_id,
+                proposal_revision=payload.proposal_revision,
+                outcome="active",
+                validation_receipt=receipt,
+                active_strategy_revision=receipt["strategy_revision"],
+            )
+        _clear_public_retrieval_analysis_cache()
+        return _retrieval_release_projection(payload.proposal_id)
+    except HTTPException:
+        raise
+    except (OSError, RuntimeError, ValueError) as exc:
+        _raise_retrieval_release_api_error(operation="decision", error=exc)
+
+
+@app.post("/agent/retrieval/release/rollback")
+def retrieval_release_rollback(
+    payload: RetrievalReleaseRollbackRequest,
+    http_request: Request,
+) -> dict:
+    """Atomically roll back the active release and persist its lifecycle."""
+
+    actor = _human_oracle_actor_from_request(http_request)
+    session = _consume_retrieval_release_session(
+        http_request,
+        actor_id=actor.principal_hmac_sha256,
+        action="rollback",
+    )
+    try:
+        release = load_retrieval_release(
+            project_root=PROJECT_ROOT,
+            artifact_root=_runtime_artifact_root(),
+            proposal_id=session["proposal_id"],
+            proposal_revision=session["proposal_revision"],
+        )
+        outcome = release.get("outcome")
+        if not isinstance(outcome, dict) or release["lifecycle"] != "active":
+            raise RetrievalReleaseError(
+                "release_not_active",
+                "retrieval release is not active",
+            )
+        activation_receipt = outcome.get("validation_receipt")
+        if not isinstance(activation_receipt, dict):
+            raise RetrievalReleaseError(
+                "activation_receipt_invalid",
+                "retrieval activation receipt is unavailable",
+            )
+        expected_target = activation_receipt.get("rollback_strategy_revision")
+        if (
+            payload.expected_active_revision != outcome.get("active_strategy_revision")
+            or payload.target_revision != expected_target
+            or payload.expected_active_revision == payload.target_revision
+        ):
+            raise RetrievalReleaseError(
+                "rollback_revision_conflict",
+                "rollback revisions do not match the active release",
+            )
+        receipt = rollback_retrieval_strategy(
+            baseline_index_path=_catalog_index_path(),
+            active_index_path=_catalog_active_index_path(),
+            artifact_root=_runtime_artifact_root(),
+            expected_active_revision=payload.expected_active_revision,
+        )
+        if receipt.get("strategy_revision") != payload.target_revision:
+            raise RetrievalReleaseError(
+                "rollback_receipt_conflict",
+                "rollback receipt does not match the requested target",
+            )
+        record_retrieval_release_rollback(
+            project_root=PROJECT_ROOT,
+            artifact_root=_runtime_artifact_root(),
+            proposal_id=session["proposal_id"],
+            proposal_revision=session["proposal_revision"],
+            rollback_receipt=receipt,
+        )
+        _clear_public_retrieval_analysis_cache()
+        return _retrieval_release_projection(session["proposal_id"])
+    except HTTPException:
+        raise
+    except (OSError, RuntimeError, ValueError) as exc:
+        _raise_retrieval_release_api_error(operation="rollback", error=exc)
 
 
 @app.post("/agent/eval/run", response_model=AgentEvalResponse)
@@ -3331,10 +4019,42 @@ def agent_strategy_catalog() -> dict:
     """Return approved strategies visible to the portfolio strategy platform."""
 
     try:
-        return load_strategy_catalog(
+        catalog = load_strategy_catalog(
             project_root=PROJECT_ROOT,
             artifact_root=_agent_artifact_root(),
         )
+        retrieval = load_retrieval_release_catalog(
+            project_root=PROJECT_ROOT,
+            artifact_root=_runtime_artifact_root(),
+        )
+        active_release = retrieval["active_retrieval_release"]
+        if isinstance(active_release, dict):
+            serving = get_active_catalog_search_service().readiness()
+            serving_matches = (
+                serving.get("ready") is True
+                and serving.get("mode") == "v2"
+                and serving.get("strategy_revision")
+                == active_release.get("active_strategy_revision")
+            )
+            active_release.update(
+                {
+                    "health": (
+                        "ready"
+                        if serving_matches
+                        else serving.get("error_code", "not_ready")
+                    ),
+                    "index_id": serving.get("index_id"),
+                    "index_schema_version": serving.get("index_schema_version"),
+                    "ready": serving_matches,
+                    "rollout": "explicit_active_lane",
+                }
+            )
+        return {
+            **catalog,
+            "active_retrieval_release": active_release,
+            "retrieval_release_schema_version": retrieval["schema_version"],
+            "retrieval_releases": retrieval["releases"],
+        }
     except (OSError, RuntimeError, ValueError) as exc:
         trace_id = current_trace_id()
         logger.error(

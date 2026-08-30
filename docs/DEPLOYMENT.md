@@ -1,10 +1,10 @@
 # Full-catalog portfolio deployment
 
-This deployment serves the baseline search over all 1,814,924 official ESCI
-products. It does not claim Amazon production parity or full-catalog relevance
-quality; the optimized website lane remains closed. The repository now also
-contains a stage-aware retrieval analysis route and its Nginx protection, but
-this document does not claim that new route or UI is currently deployed.
+This deployment serves an immutable baseline over all 1,814,924 official ESCI
+products plus a separately approved active retrieval lane. It does not claim
+Amazon production parity or full-catalog relevance quality. The optimized lane
+stays closed until an Owner-approved Proposal passes serving validation and the
+atomic active pointer names a compatible v2 index revision.
 
 ## Topology
 
@@ -17,6 +17,7 @@ Nginx /search-eval-api/* (same HTTPS origin, access log off)
           v
 Uvicorn 127.0.0.1:8010 (www-data)
           |-- read-only --> /var/lib/search-engine-eva-agent/catalog-baseline-v1.sqlite3
+          |-- read-only --> /var/lib/search-engine-eva-agent/catalog-active-v2.sqlite3
           |
           `-- read/write -> /var/lib/search-engine-eva-agent/runtime/
 ```
@@ -35,8 +36,11 @@ identity:
 make data-download
 make data-esci-validate
 make catalog-index
+make catalog-index-v2
 ls -lh data/index/catalog-baseline-v1.sqlite3
+ls -lh data/index/catalog-v2.sqlite3
 shasum -a 256 data/index/catalog-baseline-v1.sqlite3
+shasum -a 256 data/index/catalog-v2.sqlite3
 ```
 
 Record the printed index ID, product count, locale counts, file size and hash.
@@ -45,6 +49,8 @@ The build logs can be isolated with:
 ```bash
 SEARCH_LOG_LEVEL=OFF SEARCH_LOG_LEVEL_CATALOG=INFO \
   make catalog-index 2>catalog-build.jsonl
+SEARCH_LOG_LEVEL=OFF SEARCH_LOG_LEVEL_CATALOG_INDEX=INFO \
+  make catalog-index-v2 2>catalog-v2-build.jsonl
 ```
 
 ## First application install
@@ -307,6 +313,36 @@ The fixed target path is deliberate; the source path and expected hash must be
 resolved before these replacement commands are run. The old artifact is
 replaced atomically on the same filesystem. Keep the local verified artifact so
 the previous index can be reinstalled if verification fails.
+
+Build or transfer the full-field v2 artifact separately. On the 1.9 GiB host,
+the builder streams bounded Parquet batches and requires at least 30 GiB free
+for source, SQLite temporary state and both installed indexes. A server-side
+build tied to the deployed clean commit is:
+
+```bash
+cd /var/www/search-engine-eva-agent
+sudo ./scripts/download_esci.sh
+test -z "$(sudo git status --porcelain)"
+sudo /usr/bin/time -v .venv/bin/python -m search_quality.catalog.v2_cli \
+  --source data/raw/esci/shopping_queries_dataset_products.parquet \
+  --lock data/esci.lock.json \
+  --output /var/lib/search-engine-eva-agent/catalog-active-v2.sqlite3.new \
+  --batch-size 10000 \
+  --log-module catalog_index=INFO
+sudo chown root:www-data \
+  /var/lib/search-engine-eva-agent/catalog-active-v2.sqlite3.new
+sudo chmod 0640 \
+  /var/lib/search-engine-eva-agent/catalog-active-v2.sqlite3.new
+sudo mv /var/lib/search-engine-eva-agent/catalog-active-v2.sqlite3.new \
+  /var/lib/search-engine-eva-agent/catalog-active-v2.sqlite3
+sudo -u www-data test -r \
+  /var/lib/search-engine-eva-agent/catalog-active-v2.sqlite3
+```
+
+Installing this file does not activate a strategy. Only the authenticated
+release decision route can validate an approved Proposal and advance
+`runtime/retrieval-strategies/active.json`. Keep the v1 file unchanged: it is
+the comparison lane and the first rollback target.
 
 ## Update and verify
 

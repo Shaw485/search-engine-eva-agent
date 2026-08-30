@@ -9,7 +9,8 @@ EVAL_RANKER ?= all
 .PHONY: help setup format lint policy check test smoke data-sample data-download \
 	data-esci-validate data-esci-build api opensearch-up opensearch-down \
 	smoke-opensearch eval-baseline compare-runs agent-smoke agent-eval \
-	query-set-smoke bad-cases-smoke catalog-index agent-api-volcengine-macos \
+	query-set-smoke bad-cases-smoke catalog-index catalog-index-v2 \
+	agent-api-volcengine-macos \
 	web clean
 
 help:
@@ -25,6 +26,7 @@ help:
 	@echo "data-esci-validate Verify source sizes, hashes, magic and schemas"
 	@echo "data-esci-build   Build deterministic Stage 1 train/dev/test assets"
 	@echo "catalog-index     Build the 1,814,924-product SQLite FTS5 index"
+	@echo "catalog-index-v2  Build the streamed full-field catalog v2 index"
 	@echo "api               Start the local FastAPI service"
 	@echo "agent-api-volcengine-macos Experimental Agent Plan launcher; check usage-policy gate first"
 	@echo "opensearch-up     Start the optional local OpenSearch service"
@@ -76,6 +78,9 @@ data-esci-build:
 
 catalog-index:
 	$(VENV_PYTHON) -m search_quality.catalog.cli
+
+catalog-index-v2:
+	$(VENV_PYTHON) -m search_quality.catalog.v2_cli
 
 api:
 	$(VENV_PYTHON) -m uvicorn apps.api.main:app --host 127.0.0.1 --port 8000 --no-access-log

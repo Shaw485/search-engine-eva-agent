@@ -11,7 +11,7 @@ requires-python = ">=3.11,<3.14"
 dependencies = [
   "fastapi>=0.116,<1",
   "openai>=2,<3",
-  "polars>=1.33,<2",
+  "polars>=1.44,<2",
   "pydantic>=2.11,<3",
   "uvicorn>=0.35,<1",
 ]
@@ -29,6 +29,7 @@ search-quality-agent-replay = "search_quality.agent.replay_cli:main"
 search-quality-agent-eval = "search_quality.agent_eval.cli:main"
 search-quality-query-constructor = "search_quality.query_constructor.cli:main"
 search-quality-bad-cases = "search_quality.bad_cases.cli:main"
+search-quality-catalog-v2 = "search_quality.catalog.v2_cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

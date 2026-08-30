@@ -37,6 +37,9 @@ LOG_MODULES = frozenset(
         "bad_case_supervisor",
         "bad_case_worker",
         "catalog",
+        "catalog_index",
+        "catalog_pipeline",
+        "catalog_serving",
         "data",
         "diagnostic_experiments",
         "evaluation",
@@ -45,6 +48,7 @@ LOG_MODULES = frozenset(
         "query_constructor",
         "retrieval",
         "retrieval_analysis",
+        "retrieval_release",
         "stage_diagnosis",
     }
 )

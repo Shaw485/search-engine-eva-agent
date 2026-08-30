@@ -275,6 +275,27 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
   证据，也不解锁 dev/test 或策略激活。
 - 状态：**Explanation delivered; independent verification pending**
 
+## 当前插入知识：批准、激活与实际执行是三个不同事实
+
+【必学知识提醒】
+
+- 当前知识：Owner 批准表示候选可以进入生产验证；只有完整配置、父 revision、
+  部署代码、索引身份和 sentinel 全部通过并原子推进 serving pointer 后，策略才
+  是 active；每次搜索响应仍须报告它实际解析并执行的 revision/index。
+- 为什么现在必须理解：否则 UI 很容易在审批完成时提前显示“已上线”，或在
+  v2 索引损坏时悄悄退回 baseline 却继续标记新策略，形成无法审计的假激活。
+- 最低掌握范围：能区分 `approved_for_validation`、active pointer 和请求响应的
+  executed identity；能说明配置/索引不兼容为何必须 fail closed。
+- 具体例子：策略要求 `bullet_point/description` 多字段通道而服务器仍只有 v1
+  索引时，active lane 应返回通用 503 与 trace ID，不能运行旧 AND baseline 后
+  回报 `multi-field-bm25-weighted-rrf-v1`。回滚则只原子指回已验证的 immutable
+  baseline revision。
+- 验证证据：2026-08-30 已随实现进度说明；小型 fixture 覆盖 baseline、批准后
+  sentinel 激活、真实 revision/index/channel counts、索引不兼容拒绝和原子
+  rollback。全量 1,814,924 商品 v2 索引尚未构建或部署，Owner 独立理解证据
+  仍待后续提供。
+- 状态：**Explanation delivered; independent verification pending**
+
 ## 检查点记录
 
 完成一个检查点后，在这里追加简短记录：

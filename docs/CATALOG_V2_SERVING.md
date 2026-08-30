@@ -1,0 +1,142 @@
+# Catalog v2 active serving
+
+This module turns the approved weighted multi-field retrieval candidate into a
+real, explicit canary search lane. It does not replace the immutable baseline
+lane and it does not treat Owner approval alone as activation.
+
+## Contracts
+
+Catalog v2 indexes the following source fields with SQLite FTS5:
+
+- `product_id`
+- `product_title`
+- `product_brand`
+- `product_bullet_point`
+- `product_description`
+- `product_color`
+
+`build_catalog_index_v2` keeps the deployed v1 reader and builder unchanged.
+It validates the locked source size/hash, reads Parquet through Polars streaming
+batches, rejects duplicate `(locale, product_id)` keys, builds into a temporary
+database, verifies row counts and metadata, fsyncs it and atomically replaces
+the requested output. The official 1,814,924-product artifact is intentionally
+not committed to Git.
+
+The only supported v2 production pipeline is:
+
+```text
+title BM25 OR Top 50 -------------------- 1.0 --\
+all-title-token / exact-ID Top 50 ------- 1.0 --- RRF(k=60) Top 20
+multi-field BM25 OR Top 50 -------------- 0.1 --/       |
+                                                        v
+                                           title BM25 coarse Top 10
+```
+
+Every active-lane response reports the strategy ID, immutable 64-character
+strategy revision, index ID/schema, pipeline ID and actual per-stage counts.
+The baseline mode reports its real baseline identity rather than claiming the
+v2 strategy.
+
+## Build without loading the full catalog into RAM
+
+The production CLI is:
+
+```bash
+.venv/bin/python -m search_quality.catalog.v2_cli \
+  --source data/raw/esci/shopping_queries_dataset_products.parquet \
+  --lock data/esci.lock.json \
+  --output data/index/catalog-v2.sqlite3 \
+  --batch-size 10000 \
+  --log-module catalog_index=INFO \
+  2>catalog-v2-build.jsonl
+```
+
+The CLI requires a clean Git revision because that revision enters the index
+identity. On the current 1.9 GiB server, keep the default batch size initially,
+ensure the index and SQLite temporary files are on the filesystem with at least
+30 GiB free, and observe peak RSS and disk usage during the first formal build:
+
+```bash
+/usr/bin/time -v .venv/bin/python -m search_quality.catalog.v2_cli ...
+df -h data/index
+```
+
+Do not copy the active pointer until the completed build event and independent
+metadata/sentinel validation succeed. The source Parquet download is an
+operator step and must still match `data/esci.lock.json`.
+
+## Approval, activation and rollback
+
+`load_retrieval_activation_envelope` supplies an immutable Proposal plus an
+Owner `approved_for_validation` decision. Pass that envelope to:
+
+```python
+receipt = validate_and_activate_retrieval_strategy(
+    envelope,
+    baseline_index_path,
+    catalog_v2_index_path,
+    artifact_root,
+    revision_provider,
+)
+```
+
+Activation verifies the content-addressed Proposal and decision, exact
+`1/1/0.1` pipeline config/hash, parent serving revision, deployment Git
+revision, v1/v2 index identities and a bounded two-query v2 sentinel. Any
+failure raises a stable serving exception and leaves the active pointer
+unchanged.
+
+Successful validation writes content-addressed revision and receipt artifacts,
+then atomically replaces only:
+
+```text
+<artifact_root>/retrieval-strategies/active.json
+```
+
+The pointer has exactly `schema_version`, `strategy_id` and
+`strategy_revision`. Its target is always the immutable
+`revisions/<strategy_revision>.json`; it never accepts a filesystem path.
+Readers snapshot the pointer once and then validate the target hash, strategy,
+pipeline and configured index identity. A concurrent switch therefore yields
+either the complete old revision or the complete new revision, never a mixed
+configuration.
+
+`rollback_retrieval_strategy` requires the expected current revision and
+atomically points at the recorded immutable rollback target. The initial v2
+activation creates an immutable baseline target, so rollback also uses pointer
+replacement rather than deleting state.
+
+## API integration points
+
+`apps/api/main.py` is deliberately not modified by this module. Its integration
+surface is:
+
+- `ActiveCatalogSearchService(...).readiness()` for an active-lane health route;
+- `ActiveCatalogSearchService(...).search(query, top_k=10)` for
+  `/catalog/search/active`;
+- `load_active_retrieval_revision(artifact_root)` for Proposal parent revision
+  and approval CAS;
+- `validate_and_activate_retrieval_strategy(...)` after Owner approval;
+- `rollback_retrieval_strategy(...)` for an Owner-only recovery route.
+
+The API should map invalid Query input to 400, incompatible active state/index
+to a generic 503 with request trace ID, stale activation/rollback CAS to 409,
+and must never fall back to baseline while reporting the v2 strategy. The
+existing `/catalog/search` remains the explicit baseline lane.
+
+## Independent diagnostics
+
+The three runtime areas have separate logger namespaces and switches:
+
+- `catalog_index`: streamed build progress and atomic publication;
+- `catalog_pipeline`: channel/fusion/coarse counts and bounded latency;
+- `catalog_serving`: pointer resolution, activation, rollback and active-lane
+  request boundaries.
+
+Use `SEARCH_LOG_LEVEL=OFF` plus exactly one module override to isolate a layer.
+Logs contain only IDs, revisions, counts, duration and stable error types/codes.
+They never contain source/index paths, Query text, product IDs/content,
+Proposal bodies, credentials or exception messages. CLI stderr files remain
+operator-owned; production rotation and retention belong to journald as
+documented in `docs/LOGGING.md`.
+
