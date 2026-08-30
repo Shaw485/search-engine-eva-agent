@@ -182,10 +182,11 @@ Per-Query debug events use numeric Query IDs and counts. They do not include raw
 Query text, product titles, descriptions, vectors, request bodies or result
 payloads.
 
-The full-catalog builder emits command/build start, per-batch debug progress,
-completion and failure events. Search emits index readiness plus request start
-and completion. Safe fields include index ID, expected/processed/result counts,
-token count, top K, duration and artifact size. These events do not contain the
+The full-catalog builder emits command/build start, first-batch and 100,000-row
+INFO progress with peak RSS, optional per-batch DEBUG progress, completion and
+failure events. Search emits index readiness plus request start and completion.
+Safe fields include index ID, expected/processed/result counts, token count,
+top K, duration and artifact size. These events do not contain the
 source/index path, raw Query, product IDs, titles, brands, colors or response
 body. `catalog_index_build_completed` means the artifact was verified, fsynced
 and atomically installed at the operator-selected output path.

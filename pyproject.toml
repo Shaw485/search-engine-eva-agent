@@ -12,6 +12,7 @@ dependencies = [
   "fastapi>=0.116,<1",
   "openai>=2,<3",
   "polars>=1.44,<2",
+  "pyarrow>=25.0.1,<26",
   "pydantic>=2.11,<3",
   "uvicorn>=0.35,<1",
 ]

@@ -97,10 +97,13 @@ The first round starts from title BM25; after approval, the next optimizer round
 uses the approved config and skips duplicates. It writes approve/reject
 decisions plus approved optimizer-baseline configs under ignored `runs/`
 locally or a private production artifact root. The public workbench can request
-and inspect proposals; approve/reject remains restricted to the server's
-loopback Owner channel until real authentication exists. The active config does
-not yet change `/catalog/search`. This proves a bounded control/evidence path,
-not LLM decision quality or production search quality.
+and inspect proposals. A separate Owner page uses Basic authentication plus
+same-origin, short-lived single-use release tokens for approve/reject/rollback.
+Approval still does not imply activation: the full-field index, exact
+config/revision and serving sentinel must pass before an atomic pointer changes
+the explicit active search lane. The immutable baseline `/catalog/search` lane
+never changes. This proves a bounded control/evidence path, not LLM decision
+quality or production search quality.
 
 The optional OpenSearch 3.8.0 adapter, mapping, and Apple Silicon-compatible
 Compose profile are implemented. Live container verification remains pending

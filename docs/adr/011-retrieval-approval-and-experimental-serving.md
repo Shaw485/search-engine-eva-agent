@@ -139,6 +139,11 @@ production-quality claim and removes the stable control.
   exact same-origin checks and a short-lived, single-use approval token.
 - **Index incompatibility:** unsupported schema, missing fields or config hash
   mismatch fails validation without moving the active pointer.
+- **Builder memory boundary:** the first full build exposed that downstream
+  batched SQLite writes did not bound an upstream Parquet decoder. The builder
+  now uses single-threaded PyArrow record batches, per-batch records/FTS commits,
+  a 32 MiB SQLite cache and no final full-index rebuild/optimize; formal release
+  still requires measured peak-RSS evidence on the production host.
 - **Secret/privacy leakage:** logs contain IDs, counts, stages and durations,
   never credentials, raw Query text, product fields or response bodies.
 - **Rollback drift:** rollback uses an expected-active revision and changes one

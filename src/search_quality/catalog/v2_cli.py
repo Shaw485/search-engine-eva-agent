@@ -42,7 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=PROJECT_ROOT / DEFAULT_CATALOG_V2_INDEX,
     )
-    parser.add_argument("--batch-size", type=int, default=10_000)
+    parser.add_argument("--batch-size", type=int, default=5_000)
     add_logging_arguments(parser)
     return parser
 

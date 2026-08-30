@@ -219,9 +219,11 @@ not enter an access log. Only rejections are written to the dedicated safe JSON
 logs described below. Unknown `/search-eval-api/agent/*` routes fail closed with
 `404`; only the exact retrieval analysis and adopted strategy catalog routes are
 public. Proposal, Agent Eval, Query construction, Bad Case, diagnostic planning
-and Human Oracle routes remain Owner-authenticated. The exact decision location
-deliberately returns 404 even with credentials; human decisions are owner-only
-and must use the loopback API.
+and Human Oracle routes remain Owner-authenticated. The legacy strategy decision
+location deliberately returns 404 even with credentials. Retrieval release
+session, decision and rollback are three exact Owner-authenticated routes; they
+require same-origin headers and use a short-lived, action-bound, single-use
+token before any decision or rollback mutation.
 
 Every Basic-auth location sends only `crit` events to
 `/var/log/nginx/search-agent-auth-critical.log`. This prevents routine unknown
@@ -315,9 +317,12 @@ replaced atomically on the same filesystem. Keep the local verified artifact so
 the previous index can be reinstalled if verification fails.
 
 Build or transfer the full-field v2 artifact separately. On the 1.9 GiB host,
-the builder streams bounded Parquet batches and requires at least 30 GiB free
-for source, SQLite temporary state and both installed indexes. A server-side
-build tied to the deployed clean commit is:
+the builder uses PyArrow record batches and one SQLite/FTS transaction per
+batch. It requires at least 30 GiB free for source, SQLite temporary state and
+both installed indexes. The earlier Polars reader was killed at about 1.77 GiB
+peak RSS before its first write, so a successful CLI exit alone is
+insufficient: retain `/usr/bin/time -v` peak-RSS evidence. A server-side build
+tied to the deployed clean commit is:
 
 ```bash
 cd /var/www/search-engine-eva-agent
@@ -327,7 +332,7 @@ sudo /usr/bin/time -v .venv/bin/python -m search_quality.catalog.v2_cli \
   --source data/raw/esci/shopping_queries_dataset_products.parquet \
   --lock data/esci.lock.json \
   --output /var/lib/search-engine-eva-agent/catalog-active-v2.sqlite3.new \
-  --batch-size 10000 \
+  --batch-size 5000 \
   --log-module catalog_index=INFO
 sudo chown root:www-data \
   /var/lib/search-engine-eva-agent/catalog-active-v2.sqlite3.new
@@ -343,6 +348,14 @@ Installing this file does not activate a strategy. Only the authenticated
 release decision route can validate an approved Proposal and advance
 `runtime/retrieval-strategies/active.json`. Keep the v1 file unchanged: it is
 the comparison lane and the first rollback target.
+
+Before and after installation, fail closed if an active pointer unexpectedly
+exists; never delete an existing pointer as part of deployment:
+
+```bash
+sudo test ! -e \
+  /var/lib/search-engine-eva-agent/runtime/retrieval-strategies/active.json
+```
 
 ## Update and verify
 
@@ -501,10 +514,15 @@ curl --user shaw --request POST \
   --header 'Sec-Fetch-Site: same-origin' \
   --data '{"diagnostic_id":"bad-case-REPLACE_ME","query_set_id":"query-set-REPLACE_ME"}'
 curl 'https://shawspace.cn/search-eval-api/agent/strategy/catalog'
-curl --output /dev/null --write-out '%{http_code}\n' \
-  --request POST 'https://shawspace.cn/search-eval-api/agent/strategy/decision' \
-  --header 'Content-Type: application/json' \
-  --data '{"proposal_id":"proposal-000000000000","decision":"reject"}'
+for action in session decision rollback; do
+  curl --output /dev/null --write-out "$action %{http_code}\n" \
+    --request POST \
+    "https://shawspace.cn/search-eval-api/agent/retrieval/release/$action" \
+    --header 'Content-Type: application/json' \
+    --data '{}'
+done
+curl --output /dev/null --write-out 'legacy-decision %{http_code}\n' \
+  --request POST 'https://shawspace.cn/search-eval-api/agent/strategy/decision'
 sudo -u www-data test -w /var/lib/search-engine-eva-agent/runtime
 sudo -u www-data test ! -w /var/www/search-engine-eva-agent
 test -z "$(sudo git -C /var/www/search-engine-eva-agent status --porcelain)"
@@ -539,14 +557,21 @@ Acceptance requires:
    non-JSON requests fail closed. No credential appears in Cookie, URL,
    `localStorage`, `sessionStorage`, browser logs, Nginx rejection logs or
    application logs. Search and strategy pages remain anonymously accessible.
-4. The strategy catalog endpoint returns the current approved runtime strategy
-   list. It can be empty before the Owner approves a proposal.
-5. The public decision check returns `404`; only a deliberate loopback request
-   from the server can approve or reject a proposal.
+4. The strategy catalog endpoint returns the current runtime strategy list and
+   a safe release projection. Before approval,
+   `active_retrieval_release` is null and the active pointer does not exist.
+5. Anonymous calls to the exact retrieval release session, decision and
+   rollback routes return a final `403`; an unknown Agent route and the legacy
+   `/agent/strategy/decision` route return `404`. Deployment verification must
+   not create an authenticated session or submit `approve`/`reject` on behalf
+   of the Owner.
 6. The source checkout remains clean and unwritable to `www-data`, while only
    the dedicated runtime directory is writable.
-7. The website renders full-catalog results in the left lane.
-8. The optimized lane is still visibly unsupported.
+7. The website renders full-catalog baseline results in the left lane. Before
+   approval, `POST /catalog/search/active` returns `409` with
+   `active_strategy_unavailable`; it must not silently return baseline results.
+8. The optimized lane reports the actual active readiness and remains disabled
+   until the serving pointer, immutable revision and compatible v2 index agree.
 9. A failed Query can be correlated by `X-Request-ID` without Query text in logs.
 
 For stage-aware retrieval, a successful public response means only that the
@@ -582,10 +607,11 @@ analytics, access logs or exports. A sealed Oracle is diagnostic evidence only:
 it creates no product relevance labels, quality conclusion, root-cause claim or
 strategy write.
 
-To record an intentional human decision, sign in to the server and call
-`http://127.0.0.1:8010/agent/strategy/decision` directly with the reviewed
-proposal ID. This mutates the strategy catalog, so it is not part of automated
-deployment verification.
+To record an intentional human decision, the Owner opens `search-owner.html`,
+reviews the immutable Proposal revision/evidence and deliberately chooses
+approve or reject. The page first requests the corresponding short-lived
+release token and then submits the bound action. This mutates release state and
+is therefore never part of automated deployment verification.
 
 Use a response request ID to inspect safe diagnostics:
 

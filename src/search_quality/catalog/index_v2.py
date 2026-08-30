@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
+import pyarrow.parquet as pq
 
 CATALOG_V2_SCHEMA_VERSION = "catalog-sqlite-fts5-v2"
 DEFAULT_CATALOG_V2_INDEX = Path("data/index/catalog-v2.sqlite3")
@@ -164,7 +165,7 @@ def build_catalog_index_v2(
     expected_source_sha256: str,
     expected_product_count: int,
     code_revision: str,
-    batch_size: int = 10_000,
+    batch_size: int = 5_000,
 ) -> CatalogV2IndexMetadata:
     """Stream the product Parquet into an atomically published v2 index."""
 
@@ -188,7 +189,10 @@ def build_catalog_index_v2(
 
     if output.is_symlink():
         raise ValueError("catalog v2 output must not be a symbolic link")
-    lazy_frame = _normalized_product_scan(source)
+    parquet = _open_product_source(source)
+    if parquet.metadata.num_rows != expected_product_count:
+        parquet.close(force=True)
+        raise ValueError("catalog Parquet row count does not match the contract")
     output.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         dir=output.parent,
@@ -214,30 +218,69 @@ def build_catalog_index_v2(
             _prepare_database(connection)
             insert_sql = (
                 "INSERT INTO catalog_product_records("
-                "product_id, locale, title, brand, bullet_point, description, color"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?)"
+                "rowid, product_id, locale, title, brand, bullet_point, "
+                "description, color"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
             )
-            connection.execute("BEGIN")
-            for batch in lazy_frame.collect_batches(
-                chunk_size=batch_size,
-                maintain_order=True,
-                engine="streaming",
-            ):
-                _validate_product_batch(batch)
-                connection.executemany(insert_sql, batch.iter_rows())
-                batch_count = batch.height
-                rows_indexed += batch_count
-                locale_counts.update(
-                    str(locale)
-                    for locale in batch.get_column("product_locale").to_list()
-                )
-                logger.debug(
-                    "catalog_v2_index_batch_indexed",
-                    extra={
-                        "batch_count": batch_count,
-                        "rows_indexed": rows_indexed,
-                    },
-                )
+            fts_insert_sql = (
+                "INSERT INTO catalog_products("
+                "rowid, product_id, locale, title, brand, bullet_point, "
+                "description, color"
+                ") SELECT rowid, product_id, locale, title, brand, bullet_point, "
+                "description, color FROM catalog_product_records "
+                "WHERE rowid BETWEEN ? AND ? ORDER BY rowid"
+            )
+            next_progress_log = 100_000
+            try:
+                for record_batch in parquet.iter_batches(
+                    batch_size=batch_size,
+                    columns=_available_product_columns(parquet),
+                    use_threads=False,
+                    use_pandas_metadata=False,
+                ):
+                    batch = _normalize_product_batch(pl.from_arrow(record_batch))
+                    _validate_product_batch(batch)
+                    first_rowid = rows_indexed + 1
+                    batch_count = batch.height
+                    last_rowid = rows_indexed + batch_count
+                    try:
+                        connection.execute("BEGIN IMMEDIATE")
+                        connection.executemany(
+                            insert_sql,
+                            (
+                                (rowid, *row)
+                                for rowid, row in enumerate(
+                                    batch.iter_rows(), start=first_rowid
+                                )
+                            ),
+                        )
+                        connection.execute(fts_insert_sql, (first_rowid, last_rowid))
+                        connection.commit()
+                    except Exception:
+                        connection.rollback()
+                        raise
+                    rows_indexed = last_rowid
+                    locale_counts.update(batch.get_column("product_locale").to_list())
+                    logger.debug(
+                        "catalog_v2_index_batch_indexed",
+                        extra={
+                            "batch_count": batch_count,
+                            "rows_indexed": rows_indexed,
+                        },
+                    )
+                    if first_rowid == 1 or rows_indexed >= next_progress_log:
+                        logger.info(
+                            "catalog_v2_index_progress",
+                            extra={
+                                "batch_count": batch_count,
+                                "peak_rss_bytes": _peak_rss_bytes(),
+                                "rows_indexed": rows_indexed,
+                            },
+                        )
+                        while next_progress_log <= rows_indexed:
+                            next_progress_log += 100_000
+            finally:
+                parquet.close(force=True)
             if rows_indexed != expected_product_count:
                 raise ValueError("catalog product count does not match the contract")
             metadata = _metadata_for_build(
@@ -250,12 +293,9 @@ def build_catalog_index_v2(
             _store_metadata(connection, metadata)
             connection.commit()
             connection.execute(
-                "INSERT INTO catalog_products(catalog_products) VALUES ('rebuild')"
+                "INSERT INTO catalog_products(catalog_products, rank) "
+                "VALUES ('integrity-check', 1)"
             )
-            connection.execute(
-                "INSERT INTO catalog_products(catalog_products) VALUES ('optimize')"
-            )
-            connection.commit()
             stored = connection.execute(
                 "SELECT count(*) FROM catalog_product_records"
             ).fetchone()[0]
@@ -286,6 +326,8 @@ def build_catalog_index_v2(
         )
         raise
     finally:
+        with contextlib.suppress(Exception):
+            parquet.close(force=True)
         with contextlib.suppress(FileNotFoundError):
             temporary.unlink()
         for suffix in ("-journal", "-shm", "-wal"):
@@ -329,16 +371,24 @@ def _validate_build_inputs(
         raise FileNotFoundError(source)
 
 
-def _normalized_product_scan(source: Path) -> pl.LazyFrame:
-    scan = pl.scan_parquet(source, low_memory=True)
-    schema = scan.collect_schema()
-    missing = sorted(_REQUIRED_SOURCE_COLUMNS - set(schema.names()))
+def _open_product_source(source: Path) -> pq.ParquetFile:
+    parquet = pq.ParquetFile(source, memory_map=True, pre_buffer=False)
+    missing = sorted(_REQUIRED_SOURCE_COLUMNS - set(parquet.schema_arrow.names))
     if missing:
         raise ValueError(f"catalog source is missing required columns: {missing}")
+    return parquet
 
+
+def _available_product_columns(parquet: pq.ParquetFile) -> list[str]:
+    available = set(parquet.schema_arrow.names)
+    return [column for column in CATALOG_V2_PRODUCT_COLUMNS if column in available]
+
+
+def _normalize_product_batch(batch: pl.DataFrame) -> pl.DataFrame:
+    available = set(batch.columns)
     expressions: list[pl.Expr] = []
     for column in CATALOG_V2_PRODUCT_COLUMNS:
-        if column in schema:
+        if column in available:
             expression = pl.col(column)
         elif column in _OPTIONAL_SOURCE_COLUMNS:
             expression = pl.lit("")
@@ -351,7 +401,7 @@ def _normalized_product_scan(source: Path) -> pl.LazyFrame:
         else:
             expression = expression.cast(pl.String).str.strip_chars()
         expressions.append(expression.alias(column))
-    return scan.select(expressions)
+    return batch.select(expressions)
 
 
 def _validate_product_batch(batch: pl.DataFrame) -> None:
@@ -365,7 +415,7 @@ def _prepare_database(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA journal_mode=OFF")
     connection.execute("PRAGMA synchronous=OFF")
     connection.execute("PRAGMA temp_store=FILE")
-    connection.execute("PRAGMA cache_size=-131072")
+    connection.execute("PRAGMA cache_size=-32768")
     connection.execute("PRAGMA locking_mode=EXCLUSIVE")
     connection.execute(
         "CREATE TABLE catalog_metadata ("

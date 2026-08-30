@@ -337,6 +337,36 @@ def test_public_strategy_catalog_is_exact_and_unknown_agent_routes_fail_closed()
     assert "return 404;" in bare_agent
 
 
+def test_owner_retrieval_release_routes_are_exact_authenticated_and_guarded() -> None:
+    nginx = (ROOT / "deploy/nginx-search-eval.conf").read_text(encoding="utf-8")
+
+    for action, timeout in (
+        ("session", "15s"),
+        ("decision", "30s"),
+        ("rollback", "15s"),
+    ):
+        route = f"/search-eval-api/agent/retrieval/release/{action}"
+        location = _nginx_location(nginx, f"= {route}")
+        _assert_owner_rate_limit(location)
+        assert 'auth_basic "Search Agent Owner";' in location
+        assert "auth_basic_user_file /etc/nginx/.search-agent.htpasswd;" in location
+        assert "error_page 401 =403 /__search-agent-auth-failed;" in location
+        assert "client_max_body_size 2k;" in location
+        assert "limit_except POST" in location
+        assert "deny all;" in location
+        assert (
+            f"proxy_pass http://127.0.0.1:8010/agent/retrieval/release/{action};"
+            in location
+        )
+        assert "proxy_set_header X-Search-Owner-Principal $remote_user;" in location
+        assert "proxy_set_header Origin $http_origin;" in location
+        assert "proxy_set_header Sec-Fetch-Site $http_sec_fetch_site;" in location
+        assert 'proxy_set_header Authorization "";' in location
+        assert 'proxy_set_header Cookie "";' in location
+        assert f"proxy_read_timeout {timeout};" in location
+        assert 'add_header Cache-Control "no-store" always;' in location
+
+
 def test_catalog_artifact_is_read_only_and_configured_for_service_user() -> None:
     service = (ROOT / "deploy/search-engine-eva-agent.service").read_text(
         encoding="utf-8"
@@ -347,7 +377,15 @@ def test_catalog_artifact_is_read_only_and_configured_for_service_user() -> None
         "SEARCH_CATALOG_INDEX=/var/lib/search-engine-eva-agent/"
         "catalog-baseline-v1.sqlite3"
     ) in service
+    assert (
+        "SEARCH_CATALOG_ACTIVE_INDEX=/var/lib/search-engine-eva-agent/"
+        "catalog-active-v2.sqlite3"
+    ) in service
     assert "SEARCH_LOG_LEVEL_CATALOG=WARNING" in service
+    assert "SEARCH_LOG_LEVEL_CATALOG_INDEX=INFO" in service
+    assert "SEARCH_LOG_LEVEL_CATALOG_PIPELINE=WARNING" in service
+    assert "SEARCH_LOG_LEVEL_CATALOG_SERVING=INFO" in service
+    assert "SEARCH_LOG_LEVEL_RETRIEVAL_RELEASE=INFO" in service
     assert "-o root -g www-data -m 0640" in deployment
     assert "/catalog/search" in deployment
 

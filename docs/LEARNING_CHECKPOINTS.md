@@ -296,6 +296,26 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
   仍待后续提供。
 - 状态：**Explanation delivered; independent verification pending**
 
+## 当前插入知识：声称“流式”必须用峰值内存证明
+
+【必学知识提醒】
+
+- 当前知识：离线索引链路是 `Parquet 解码 -> 批处理规范化 -> SQLite 内容表 ->
+  FTS`。下游按批写入并不自动保证上游解码器有界；“代码里有 batch”不是流式
+  内存证据。
+- 为什么现在必须理解：首次 1,814,924 商品正式构建在首批 SQLite 写入前就达到
+  约 1.77 GiB RSS，并被 1.9 GiB 主机以 SIGKILL 终止。若只看 Python 生成器或
+  `tracemalloc`，会漏掉 Arrow/SQLite 的原生内存。
+- 最低掌握范围：能说明 Parquet row group 与 RecordBatch 的区别；能解释为何需要
+  `PyArrow iter_batches + pre_buffer=False + use_threads=False`、分批事务、32 MiB
+  SQLite cache，以及为何要去掉最终全库 FTS `rebuild/optimize`。
+- 验证方式：单元测试证明一个 row group 被拆成多个批次、失败不发布临时索引、
+  FTS external-content `integrity-check rank=1` 通过；生产机仍必须用
+  `/usr/bin/time -v` 记录峰值 RSS，并确认未使用意外 swap。
+- 当前状态：旧实现的 OOM 已形成负面证据；修复实现与全量重跑正在进行。Owner
+  本轮“执行”是实施授权，不等于已经独立掌握该知识，也不构成策略批准。
+- 状态：**Explanation delivered; independent verification pending**
+
 ## 检查点记录
 
 完成一个检查点后，在这里追加简短记录：
