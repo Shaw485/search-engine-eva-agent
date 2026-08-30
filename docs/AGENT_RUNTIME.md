@@ -96,6 +96,27 @@ creations, one failure, one attempt per canonical action and 120 seconds. It
 also caps per-call output and cumulative model input/output Tokens. Exceeding a
 model or Runtime budget fails the run before another Tool is dispatched.
 
+## Verified real-provider smoke
+
+On 2026-08-30, the Owner used the native hidden-input launcher to configure the
+dedicated Agent Plan Key, authorized the aggregate-only outbound call and ran
+the first successful real-provider Smoke. The requested alias resolved to
+`doubao-seed-2-1-turbo-260628`. The bounded loop made four model decisions,
+executed three allowlisted Tool calls over four steps, consumed 4,192 total
+Tokens and ended `proposal_ready` (Trace
+`b767e4c84bda412080939e9275454233`). After the uniform candidate failed seven
+Harness gates, the model selected the conservative candidate, which passed all
+configured smoke gates, then stopped with the server-computed best passing
+candidate. Offline Replay independently validated the ten-event Trace and
+reconstructed terminal report without invoking the provider.
+
+Codex implemented the adapter, Runtime and validation boundary; the Owner
+supplied the runtime credential and executed and authorized the external
+validation. This single fixed 20-Query Smoke validates connectivity,
+response-contract compatibility and one observe-decide-act path—not
+repeatability, broader search quality or production readiness. It did not
+approve, activate or deploy a strategy.
+
 ## Configure locally without exposing the Key
 
 > **Agent Plan API mode:** current package docs and console evidence indicate

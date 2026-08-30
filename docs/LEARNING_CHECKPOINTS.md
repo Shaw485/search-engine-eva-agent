@@ -151,6 +151,25 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
   能记录为已讲解，不能把供应商选择等同于 Owner 已独立掌握协议与数据边界。
 - 状态：**Explanation delivered; independent verification pending**
 
+## 当前插入知识：一次真实 Smoke 成功不等于模型质量已经验证
+
+【必学知识提醒】
+
+- 当前知识：一次成功 Run 同时验证“凭据、端点和响应契约可用”以及“某一条
+  有限 Agent 路径能完成”，但不能验证重复稳定性、泛化质量或生产可用性。
+- 为什么现在必须理解：否则会把 `proposal_ready` 误读成“策略已批准或已
+  上线”，或把 20-Query 的单次选择包装成模型已经优于确定性 Planner。
+- 最低掌握范围：能区分 Provider 接通、Agent task success、Search Harness
+  指标和 Owner approval 四个不同结论；能说明为什么仍要重复运行并比较方差、
+  Token、延迟和费用。
+- 具体例子：Trace `b767e4c84bda412080939e9275454233` 中，火山模型做了
+  4 次决策、Runtime 执行 3 个 Tool；uniform 失败七项门禁后，conservative
+  通过并被选为 `proposal_ready`。这是 Harness 约束下的一次证据化提案，不是
+  发布决定。
+- 验证证据：Owner 配置专属 Key、授权并执行真实 Smoke；Codex 实现 Provider、
+  Runtime、Harness 与 Trace。样本仅为固定 20 Query，未审批、未激活、未部署。
+- 状态：**Explanation delivered; independent verification pending**
+
 ## 当前插入知识：Recall 提升不等于最终排序提升
 
 【必学知识提醒】

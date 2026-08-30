@@ -1,7 +1,7 @@
 # ADR-010: Use a dedicated fixed Volcengine Agent Plan provider
 
-- Status: Adopted as an adapter; real custom-backend calls blocked pending
-  provider usage-policy confirmation
+- Status: Adopted and validated by one bounded real-provider smoke; repeated
+  quality, variance and cost evaluation pending
 - Date: 2026-08-29
 - Deciders: Owner (provider selection), Codex (adapter, data-boundary and
   operational design)
@@ -179,25 +179,21 @@ than granting either provider more evidence or execution authority.
 1. [x] Implement the fixed provider adapter and exact configuration validation.
 2. [x] Add offline fake-transport tests for request projection, endpoint lock,
    strict option selection, safe error mapping and secret redaction.
-3. [ ] Complete one real-key local smoke against the dedicated Agent Plan
-   entrypoint. On 2026-08-30 the first attempt hit
-   the 40-second worker deadline; after disabling deep thinking, a diagnostic
-   retry distinguished HTTP 401 authentication failure from HTTP 403
-   permission rejection. Every attempt stopped before a Tool call. The Agent
-   Plan console subsequently confirmed the subscription was active, the fixed
-   Base URL was correct, the configured credential type was a dedicated Agent
-   Plan API Key, and `doubao-seed-2.1-turbo` was an available model while the
-   launcher's former `doubao-seed-2.0-pro` value was not listed. The launcher
-   therefore pins `doubao-seed-2.1-turbo`. A later dedicated-Key request passed
-   authentication and returned in 6.3 seconds, but the original adapter rejected
-   the HTTP-success response before any Tool call because it assumed the reported
-   model must byte-for-byte equal the requested Agent Plan alias. The adapter now
-   accepts only an exact normalized alias or a versioned member of that same model
-   family, keeps exact matching for OpenAI, and emits separate privacy-safe status,
-   model, output, usage and response-ID validation codes. A real retry is still
-   required. If the exact integration is validated, record the
-   successful retry's provider/model, bounded usage, status and stable outcome
-   without storing request/response content or the Key.
+3. [x] Complete one real-key local smoke against the dedicated Agent Plan
+   entrypoint. After the same-family resolved-model compatibility fix, the Owner
+   configured the dedicated Key through the native hidden-input launcher,
+   explicitly authorized the aggregate-only provider call and ran the local
+   Smoke on 2026-08-30. Provider `volcengine_agent_plan` resolved the requested
+   package alias to `doubao-seed-2-1-turbo-260628`; the run completed
+   `proposal_ready` with four model calls, three Tool calls, four steps and 4,192
+   total Tokens. The uniform candidate failed seven Harness gates, while the
+   conservative candidate passed every configured smoke gate and was selected
+   for Owner review. Safe evidence is Trace
+   `b767e4c84bda412080939e9275454233`; offline Replay validated all ten events,
+   the hash chain, state transitions, option bindings, budgets, grounded evidence
+   and reconstructed terminal report. No Key, prompt, response body or free-form
+   reasoning was stored. This validates one fixed 20-Query provider/runtime path
+   only. It created no approval, strategy-catalog change, activation or deployment.
 4. [ ] Compare deterministic, OpenAI and Volcengine Planner task success,
    variance, Tokens, latency and cost before changing the deployed
    deterministic Planner default.

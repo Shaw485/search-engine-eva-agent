@@ -116,7 +116,7 @@ Owner 决定先在现有 `shawspace.cn` 搜索体验页搜索全部 1,814,924 �
 | 0. 工程骨架与搜索 Smoke | 可重复启动的本地搜索后端 | 为工具化提供稳定接口 | **Completed (OpenSearch live check pending)** |
 | 1. ESCI 数据与实验边界 | 可复现 train/dev/test、Manifest、数据报告 | 给 Agent 提供可信数据边界 | **Technical gate passed; learning check pending** |
 | 2. Search Evaluation Harness | 指标、BM25 基线、Run 与对比报告 | Agent 可依赖的确定性工具层 | **In Progress** |
-| 3. 最小搜索评测 Agent | 首个计划—工具—观察—报告闭环 | 第一次可见的真实 Agent 行为 | **In Progress: deterministic control + optional bounded LLM loop integrated; real-model quality pending** |
+| 3. 最小搜索评测 Agent | 首个计划—工具—观察—报告闭环 | 第一次可见的真实 Agent 行为 | **In Progress: one real bounded LLM smoke completed; repeatability and broader quality pending** |
 | 4. Agent Runtime Harness | 状态机、权限、预算、Trace、Replay | Agent 可控、可恢复、可复现 | **In Progress: local Trace/Replay + killable diagnostic worker** |
 | 5. Agent Evaluation Harness | 黄金任务集和 Agent 成绩单 | 证明 Agent 不是偶然成功 | **In Progress: fixed 12-task v1 passes locally** |
 | 6. 搜索策略与诊断实验室 | Multi-field BM25、Vector、Hybrid、Rerank、Bad Case | Agent 获得更多可组合实验工具 | **In Progress: query-scoped multi-recall + RRF + coarse-rank slice** |
@@ -237,14 +237,19 @@ Agent 循环：
 
 本阶段是作品第一次可以明确展示“Agent”的节点。
 
-当前进度（2026-08-29）：原有四个 trusted-Run 工具之外，阶段检索任务新增
+当前进度（2026-08-30）：原有四个 trusted-Run 工具之外，阶段检索任务新增
 两项最小能力：诊断基线与运行受控候选。观察驱动 Planner 已在真实 smoke
 路径上根据门禁结果完成 `uniform 失败 → conservative 通过 → aggressive
 探测失败 → 选择 conservative` 的确定性对照。可选 LLM Planner 现在会在
 每个 Observation 后只选择一个服务端有限 option ID，Runtime 再执行规范动作；
 Fake-provider Runtime/Replay 已证明它能选择 conservative 并基于 Harness 证据
-提前停止。真实 Provider 质量和重复运行稳定性尚未验证，因此不能把工程接通
-写成 LLM 决策质量已经通过。
+提前停止。2026-08-30 的首个 Owner 授权真实 Agent Plan Smoke 也已完成：
+解析模型为 `doubao-seed-2-1-turbo-260628`，4 次模型决策、3 次 Tool、4 步、
+4,192 Tokens；uniform 失败七项门禁后，LLM 改跑并选择全部 smoke 门禁通过的
+conservative，终态为 `proposal_ready`，Trace 为
+`b767e4c84bda412080939e9275454233`，且离线 Replay 通过。这验证了单次
+20-Query 的真实 Provider/Runtime 闭环，不证明重复稳定性、更大数据质量或
+生产可用性，也没有审批、激活或部署策略。
 
 ### 阶段 4：Agent Runtime Harness、Trace 与 Replay
 
