@@ -316,6 +316,24 @@ CSS 细节、重复性数据搬运和可以直接查文档的 API 参数。
   本轮“执行”是实施授权，不等于已经独立掌握该知识，也不构成策略批准。
 - 状态：**Explanation delivered; independent verification pending**
 
+## 当前插入知识：检索 Top-K 应先于长字段回表
+
+【必学知识提醒】
+
+- 当前知识：倒排索引负责从大库里得到少量 `(rowid, score)` 候选，商品内容表负责
+  补全标题、品牌、描述等展示字段。成熟查询计划通常先在索引层截断 Top-K，再对
+  这 K 个 rowid 回表，而不是先 JOIN 全量命中再截断。
+- 为什么现在必须理解：完整 v2 索引已正确构建，但旧 SQL 把外部内容表 JOIN 放在
+  Top-50 之前。`wireless mouse` 这类高频 Query 在定向冷缓存下完整 pipeline 约
+  10.46 秒并触发 5 秒门禁；仅把超时改大只会掩盖不必要的 I/O。
+- 最低掌握范围：能区分“倒排索引命中/打分”“Top-K 截断”“回表补字段”三步；能
+  解释为什么长 `description` 只应对 Top-50 候选读取，以及稳定 rowid tie-break
+  为什么属于可复现性要求。
+- 当前工程证据：materialized CTE 的冷标题通道对照约 1.50 秒，并保持 BM25 分数
+  与 50 个结果一致。完整 pipeline 仍须在新代码 revision/新索引上重新做冷、热
+  查询和 5 秒门禁验收。
+- 状态：**Explanation delivered; independent verification pending**
+
 ## 检查点记录
 
 完成一个检查点后，在这里追加简短记录：

@@ -144,6 +144,10 @@ production-quality claim and removes the stable control.
   now uses single-threaded PyArrow record batches, per-batch records/FTS commits,
   a 32 MiB SQLite cache and no final full-index rebuild/optimize; formal release
   still requires measured peak-RSS evidence on the production host.
+- **Cold-query I/O boundary:** every FTS channel materializes ranked row IDs and
+  scores before joining the external content table. This prevents broad cold
+  queries from hydrating long descriptions for the full match set before the
+  Top-50 cutoff; full-pipeline cold and warm latency remain release evidence.
 - **Secret/privacy leakage:** logs contain IDs, counts, stages and durations,
   never credentials, raw Query text, product fields or response bodies.
 - **Rollback drift:** rollback uses an expected-active revision and changes one

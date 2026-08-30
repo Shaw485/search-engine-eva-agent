@@ -578,13 +578,16 @@ def validate_production_pipeline_config(
 
 def _channel_select(score_expression: str) -> str:
     return (
-        "SELECT p.product_id, p.locale, p.title, p.brand, p.bullet_point, "
-        "p.description, p.color, "
+        "WITH ranked(rowid, score) AS MATERIALIZED ("
+        "SELECT rowid, "
         f"{score_expression} AS score "
-        "FROM catalog_products "
-        "JOIN catalog_product_records AS p ON p.rowid = catalog_products.rowid "
-        "WHERE catalog_products MATCH ? "
-        "ORDER BY score ASC, p.locale ASC, p.product_id ASC LIMIT ?"
+        "FROM catalog_products WHERE catalog_products MATCH ? "
+        "ORDER BY score ASC, rowid ASC LIMIT ?"
+        ") "
+        "SELECT p.product_id, p.locale, p.title, p.brand, p.bullet_point, "
+        "p.description, p.color, ranked.score "
+        "FROM ranked JOIN catalog_product_records AS p ON p.rowid = ranked.rowid "
+        "ORDER BY ranked.score ASC, ranked.rowid ASC"
     )
 
 

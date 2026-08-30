@@ -18,6 +18,7 @@ from search_quality.catalog.pipeline_v2 import (
     PRODUCTION_PIPELINE_ID,
     PRODUCTION_STRATEGY_ID,
     CatalogV2SearchPipeline,
+    _channel_select,
 )
 from search_quality.catalog.serving import (
     ACTIVE_POINTER_SCHEMA_VERSION,
@@ -271,6 +272,28 @@ def test_v2_index_and_three_channel_pipeline_use_full_product_fields(
     assert "P4" in hits
     assert hits["P4"].product.bullet_point == "Silent wireless mouse for travel"
     assert pipeline.search("P4").hits[0].product.product_id == "P4"
+
+
+def test_v2_channel_materializes_top_k_before_hydrating_product_content(
+    catalog_indexes: tuple[Path, Path],
+) -> None:
+    _baseline, active = catalog_indexes
+    sql = _channel_select("bm25(catalog_products, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0)")
+
+    with sqlite3.connect(active) as connection:
+        plan = connection.execute(
+            "EXPLAIN QUERY PLAN " + sql,
+            ('title : ("wireless" OR "mouse")', 2),
+        ).fetchall()
+        rows = connection.execute(
+            sql,
+            ('title : ("wireless" OR "mouse")', 2),
+        ).fetchall()
+
+    details = "\n".join(str(row[3]) for row in plan)
+    assert "MATERIALIZE ranked" in details
+    assert sql.index("LIMIT ?") < sql.index("JOIN catalog_product_records")
+    assert len(rows) == 2
 
 
 def test_activation_switches_actual_strategy_and_rollback_is_atomic(

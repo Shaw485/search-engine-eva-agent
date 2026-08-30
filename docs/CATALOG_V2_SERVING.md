@@ -35,6 +35,13 @@ multi-field BM25 OR Top 50 -------------- 0.1 --/       |
                                            title BM25 coarse Top 10
 ```
 
+Each FTS channel first materializes only ranked `(rowid, score)` Top 50, then
+hydrates those 50 rows from the external content table. Joining the full product
+records before the cutoff made a cold common-term query read long descriptions
+for a much larger match set: production validation measured about 10.46 seconds
+for `wireless mouse`. The two-phase plan measured about 1.50 seconds for the
+cold title channel and keeps the same retrieval cutoff and BM25 score.
+
 Every active-lane response reports the strategy ID, immutable 64-character
 strategy revision, index ID/schema, pipeline ID and actual per-stage counts.
 The baseline mode reports its real baseline identity rather than claiming the
